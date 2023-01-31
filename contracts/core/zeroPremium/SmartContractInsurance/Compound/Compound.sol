@@ -6,9 +6,11 @@ pragma solidity 0.8.16;
 
 /// Importing required interfaces
 import "./../../../../interfaces/Compound/ICErc20.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./../../../../interfaces/ISmartContractZPController.sol";
 import "./../../../../interfaces/Compound/ICompoundImplementation.sol";
+
+/// Importing required libraries
+import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
 
 /// Importing required contracts
 import "./../../../../BaseUpgradeablePausable.sol";
@@ -16,28 +18,54 @@ import "./../../../../BaseUpgradeablePausable.sol";
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
 contract CompoundPool is ICompoundImplementation, BaseUpgradeablePausable {
+    using SafeERC20Upgradeable for IERC20Upgradeable;
+    using SafeERC20Upgradeable for IERC20PermitUpgradeable;
+
     uint256 private _protocolID;
+    uint256 private _initVersion;
+    uint256 private _childVersion;
     ISmartContractZPController private _zpController;
     
     struct UserInfo {
         bool isActiveInvested;
         uint256 startVersionBlock;
-        uint256 withdrawnBalance;
     }
 
+    struct UserTransactionInfo {
+        uint256 depositedAmount;
+        uint256 withdrawnAmount;
+    }
+
+    struct RewardInfo {
+        uint256 rewardTokenBalance;
+        uint256 amountToBeDistributed;
+    }
+
+    /// Maps ChildVersion => ParentVersion
+    mapping(uint256 => uint256) private parentVersionInfo;
+    /// Maps --> User Address => Reward Token Address => UserInfo struct
     mapping(address => mapping(address => UserInfo)) private usersInfo;
-    /// User Address => Reward Token Address => Version => UserTransactionInfo
-    mapping(address => mapping(address => mapping(uint256 => uint256))) private userTokenBalance;
+    /// Maps --> User Address => Reward Token Address => ChildVersion => UserTransactionInfo
+    mapping(address => mapping(address => mapping(uint256 => UserTransactionInfo))) private userTransactionInfo;
 
-    constructor(address _controllerAddress) {
-        _zpController = ISmartContractZPController(_controllerAddress);
+    /// Maps reward address => Child Version => reward balance
+    mapping(address => mapping(uint256 => RewardInfo)) private rewardInfo;
+
+    function initialize() external initializer {
+        __BaseUpgradeablePausable_init(_msgSender());
     }
 
-    function initialize(
+    function init( 
+        address _controllerAddress,
         string memory protocolName,
         address deployedAddress,
         uint256 protocolID
-    ) external initializer {
+    ) external onlyAdmin {
+        if (_initVersion > 0) {
+            revert Compound_ZP__ImmutableChangesError();
+        }
+        ++_initVersion;
+        _zpController = ISmartContractZPController(_controllerAddress);
         (string memory _protocolName, address _protocolAddress) = _zpController.getProtocolInfo(protocolID);
         if (_protocolAddress != deployedAddress) {
             revert Compound_ZP__WrongInfoEnteredError();
@@ -49,79 +77,125 @@ contract CompoundPool is ICompoundImplementation, BaseUpgradeablePausable {
     }
 
     function supplyToken(
-        address _tokenAddress, 
-        address _rewardTokenAddress, 
-        uint256 _amount
-    ) external override nonReentrant returns(uint256) {
-        if (_amount < 1e10) {
+        address tokenAddress, 
+        address rewardTokenAddress, 
+        uint256 amount,
+        uint256 deadline, 
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s
+    ) external override nonReentrant returns(bool) {
+        if (amount < 1e10) {
             revert Compound_ZP__LowSupplyAmountError();
         }
-        uint256 currVersion =  _zpController.latestVersion() + 1;
-        if (!usersInfo[_msgSender()][_rewardTokenAddress].isActiveInvested) {
-            usersInfo[_msgSender()][_rewardTokenAddress].startVersionBlock = currVersion;
-            usersInfo[_msgSender()][_rewardTokenAddress].isActiveInvested = true;
+        ++_childVersion;
+        uint256 currParentVersion =  _zpController.latestVersion();
+        parentVersionInfo[_childVersion] = currParentVersion;
+
+        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
+        IERC20Upgradeable rewardToken = IERC20Upgradeable(rewardTokenAddress);
+        IERC20PermitUpgradeable tokenWithPermit = IERC20PermitUpgradeable(tokenAddress);
+
+        if (!usersInfo[_msgSender()][rewardTokenAddress].isActiveInvested) {
+            usersInfo[_msgSender()][rewardTokenAddress].startVersionBlock = _childVersion;
+            usersInfo[_msgSender()][rewardTokenAddress].isActiveInvested = true;
         }
-        uint256 balanceBeforeSupply = ICErc20(_rewardTokenAddress).balanceOf(address(this));
-        bool transferSuccess = IERC20(_tokenAddress).transferFrom(_msgSender(), address(this), _amount);
-        if (!transferSuccess) {
+        uint256 balanceBeforeSupply = rewardToken.balanceOf(address(this));
+        tokenWithPermit.safePermit(_msgSender(), address(this), amount, deadline, v, r, s);
+        token.safeTransferFrom(_msgSender(), address(this), amount);
+        token.safeIncreaseAllowance(rewardTokenAddress, amount);
+        
+        uint mintResult = ICErc20(rewardTokenAddress).mint(amount);
+        if (mintResult == 0){
             revert Compound_ZP__TransactionFailedError();
         }
-        bool approvalSuccess = IERC20(_tokenAddress).approve(_rewardTokenAddress, _amount);
-        if (!approvalSuccess) {
-            revert Compound_ZP__TransactionFailedError();
-        }
-        uint mintResult = ICErc20(_rewardTokenAddress).mint(_amount);
-        uint256 balanceAfterSupply = ICErc20(_rewardTokenAddress).balanceOf(address(this));
-        userTokenBalance[_msgSender()][_rewardTokenAddress][currVersion] += (balanceAfterSupply - balanceBeforeSupply);
-        return mintResult;
+        uint256 balanceAfterSupply = rewardToken.balanceOf(address(this));
+        rewardInfo[rewardTokenAddress][_childVersion].rewardTokenBalance += (balanceAfterSupply - balanceBeforeSupply);
+        rewardInfo[rewardTokenAddress][_childVersion - 1].amountToBeDistributed = (
+            balanceBeforeSupply - 
+            rewardInfo[rewardTokenAddress][_childVersion - 1].rewardTokenBalance
+        );
+        userTransactionInfo[_msgSender()][rewardTokenAddress][_childVersion].depositedAmount += (balanceAfterSupply - balanceBeforeSupply);
+        emit SuppliedToken(_msgSender(), tokenAddress, amount);
+        return true;
     }
 
     function withdrawToken(
-        address _tokenAddress, 
-        address _rewardTokenAddress, 
-        uint256 _amount
-    ) external override nonReentrant returns(uint256) {
-        uint256 userBalance = calculateUserBalance(_rewardTokenAddress);
-        if (userBalance >= _amount) {
-            usersInfo[_msgSender()][_rewardTokenAddress].withdrawnBalance += _amount;
-            if (_amount == userBalance) {
-                usersInfo[_msgSender()][_rewardTokenAddress].isActiveInvested = false;
-            }
-            uint256 balanceBeforeRedeem = IERC20(_tokenAddress).balanceOf(address(this));
-            uint256 redeemResult = ICErc20(_rewardTokenAddress).redeemUnderlying(_amount);
-            if (redeemResult != 0) {
-                revert Compound_ZP__TransactionFailedError();
-            }
-            uint256 balanceAfterRedeem = IERC20(_tokenAddress).balanceOf(address(this));
-            uint256 amountToBePaid = (balanceAfterRedeem - balanceBeforeRedeem);
-            bool transferSuccess = IERC20(_tokenAddress).transferFrom(address(this), _msgSender(), amountToBePaid);
-            if (!transferSuccess) {
-                revert Compound_ZP__TransactionFailedError();
-            }
-            return redeemResult;
+        address tokenAddress, 
+        address rewardTokenAddress, 
+        uint256 amount
+    ) external override nonReentrant returns(bool) {
+        ++_childVersion;
+        uint256 userBalance = calculateUserBalance(rewardTokenAddress);
+
+        if(userBalance < amount) {
+            revert Compound_ZP__LowAmountError();
         }
-        return 404;
+        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
+        IERC20Upgradeable rewardToken = IERC20Upgradeable(rewardTokenAddress);
+
+        uint256 balanceBeforeWithdraw = rewardToken.balanceOf(address(this));
+        rewardInfo[rewardTokenAddress][_childVersion].rewardTokenBalance -= amount;
+        rewardInfo[rewardTokenAddress][_childVersion - 1].amountToBeDistributed = (
+            balanceBeforeWithdraw - 
+            rewardInfo[rewardTokenAddress][_childVersion - 1].rewardTokenBalance
+        );
+
+        userTransactionInfo[_msgSender()][rewardTokenAddress][_childVersion].withdrawnAmount += amount;
+        if (amount == userBalance) {
+            usersInfo[_msgSender()][rewardTokenAddress].isActiveInvested = false;
+        }
+
+        uint256 balanceBeforeRedeem = token.balanceOf(address(this));
+        uint256 redeemResult = ICErc20(rewardTokenAddress).redeemUnderlying(amount);
+        if (redeemResult == 0){
+            revert Compound_ZP__TransactionFailedError();
+        }
+        uint256 balanceAfterRedeem = token.balanceOf(address(this));
+        uint256 amountToBePaid = (balanceAfterRedeem - balanceBeforeRedeem);
+        token.safeTransfer(_msgSender(), amountToBePaid);
+        return true;
     }
 
-    function calculateUserBalance(address _rewardTokenAddress) public view override returns(uint256) {
+    function calculateUserBalance(
+        address rewardTokenAddress
+    ) public view override returns(uint256) {
         uint256 userBalance = 0;
-        uint256 userStartVersion = usersInfo[_msgSender()][_rewardTokenAddress].startVersionBlock;
-        uint256 currVersion =  _zpController.latestVersion();
+        uint256 userRewardBalance = 0;
+        uint256 userStartVersion = usersInfo[_msgSender()][rewardTokenAddress].startVersionBlock;
+        uint256 currVersion = _childVersion;
         uint256 riskPoolCategory = 0;
-        for(uint i = userStartVersion; i <= currVersion;) {
-            uint256 userVersionBalance = userTokenBalance[_msgSender()][_rewardTokenAddress][i];
-            if (_zpController.ifProtocolUpdated(_protocolID, i)) {
-                riskPoolCategory = _zpController.getProtocolRiskCategory(_protocolID, i);
+        uint256 parentVersion = 0;
+        for(uint i = userStartVersion; i < currVersion;) {
+            UserTransactionInfo memory userBalanceInfo = userTransactionInfo[_msgSender()][rewardTokenAddress][i];
+            uint256 userDepositedBalance = userBalanceInfo.depositedAmount;
+            uint256 userWithdrawnBalance = userBalanceInfo.withdrawnAmount;
+            if (userDepositedBalance > 0) {
+                userBalance += userDepositedBalance;
             }
-            if (userVersionBalance > 0) {
-                userBalance += userVersionBalance;
-            } 
-            if (_zpController.isRiskPoolLiquidated(i, riskPoolCategory)) {
-                userBalance = ((userBalance * _zpController.getLiquidationFactor(i)) / 100);
-            } 
-            ++i;  
+            if (userWithdrawnBalance > 0) {
+                userBalance -= userWithdrawnBalance;
+            }
+            uint256 rewardEarned = (
+                (userBalance * rewardInfo[rewardTokenAddress][i].amountToBeDistributed) / 
+                rewardInfo[rewardTokenAddress][i].rewardTokenBalance
+            );
+            userRewardBalance += rewardEarned;
+            uint256 _parentVersion = _zpController.latestVersion();
+            /// this check ensures that if liquidation has happened on a particular parent version,
+            /// then user needs to liquidated once, not again and again for each child version loop call.
+            if(parentVersion != _parentVersion) {
+                parentVersion = _parentVersion;
+                if (_zpController.ifProtocolUpdated(_protocolID, parentVersion)) {
+                    riskPoolCategory = _zpController.getProtocolRiskCategory(_protocolID, parentVersion);
+                }
+                if (_zpController.isRiskPoolLiquidated(parentVersion, riskPoolCategory)) {
+                    userBalance = ((userBalance * _zpController.getLiquidationFactor(parentVersion)) / 100);
+                }
+            }
+            ++i; 
         }
-        userBalance -= usersInfo[_msgSender()][_rewardTokenAddress].withdrawnBalance;
+        userBalance += userRewardBalance;
         return userBalance;
     }
 }

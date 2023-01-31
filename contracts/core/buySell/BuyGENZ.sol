@@ -30,6 +30,10 @@ import "./../../BaseUpgradeablePausable.sol";
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
 contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
+
+    using SafeERC20Upgradeable for IERC20Upgradeable;
+    using SafeERC20Upgradeable for IERC20PermitUpgradeable;
+
     /// _tokenCounter: GENZ ERC20 tokens in circulation
     /// _tokenDAI: DAI ERC20 token
     /// _tokenUSDC: USDC ERC20 token
@@ -38,7 +42,9 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
     uint256 private _tokenPrice;
     uint256 private _currVersion;
     IERC20Upgradeable private immutable _tokenDAI;
+    IERC20Upgradeable private immutable _tokenGENZ;
     IERC20Upgradeable private immutable _tokenUSDC;
+    IERC20PermitUpgradeable private immutable _tokenPermitDAI;
     IGlobalPauseOperation private _globalPauseOperation;
 
     struct VersionableInfo {
@@ -76,9 +82,11 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
     /// @dev initializing _tokenDAI
     /// @param tokenDAI: address of the DAI token
     /// @custom:oz-upgrades-unsafe-allow-constructor
-    constructor(address tokenDAI, address tokenUSDC) {
+    constructor(address tokenDAI, address tokenUSDC, address tokenGENZ) {
         _tokenDAI = IERC20Upgradeable(tokenDAI); 
+        _tokenPermitDAI = IERC20PermitUpgradeable(tokenDAI); 
         _tokenUSDC = IERC20Upgradeable(tokenUSDC); 
+        _tokenGENZ = IERC20Upgradeable(tokenGENZ); 
     }
 
     /// @dev one time function to initialize the contract
@@ -101,10 +109,22 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
 
     /// @dev 
     /// @param value: amount of SZT tokens user wishes to purchase
-    function buyGENZToken(uint256 value) external nonReentrant ifNotPaused returns(bool) {
+    function buyGENZToken(
+        uint256 value,
+        uint deadline, 
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s
+    ) external nonReentrant ifNotPaused returns(bool) {
         if (value < 1e18) {
             revert BuySellGENZ__LowAmountError();
         }
+        uint256 amountToBePaid = value * getTokenPrice();
+        if (amountToBePaid > _tokenDAI.balanceOf(_msgSender())) {
+            revert BuySellGENZ__InsufficientBalanceError();
+        }
+        _tokenGENZ.transfer(_msgSender(), value);
+        _tokenPermitDAI.permit(_msgSender(), address(this), amountToBePaid, deadline, v, r, s);
         /// when someone purchases tokens, check how much platform has earned and update
         /// distributed amount to previous version block
         return true;
@@ -159,7 +179,7 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
         return userPremiumEarned;
     }
 
-    function getTokenPrice() external view returns(uint256) {
+    function getTokenPrice() public view returns(uint256) {
         
         return 1;
     }

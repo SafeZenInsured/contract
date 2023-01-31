@@ -44,11 +44,13 @@ contract SmartContractZPController is ISmartContractZPController, BaseUpgradeabl
     function initialize() external initializer {
         VersionInfo storage versionInfo = versionLiquidationFactor[0];
         versionInfo.liquidation = 100;
+        __BaseUpgradeablePausable_init(_msgSender());
     }
 
     function updateRiskFactor(uint256 protocolID_, uint256 riskFactor) external onlyAdmin {
-        ProtocolRiskInfo storage protocolRiskInfo = protocolsRiskInfo[protocolID_][latestVersion];
+        ProtocolRiskInfo storage protocolRiskInfo = protocolsRiskInfo[protocolID_][latestVersion + 1];
         protocolRiskInfo.riskFactor = riskFactor;
+        _addNewVersion();
     }
 
     function liquidateRiskPool(uint256 riskPoolCategory, uint256 liquidationFactor) external onlyAdmin {

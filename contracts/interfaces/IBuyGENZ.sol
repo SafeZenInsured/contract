@@ -11,6 +11,7 @@ interface IBuyGENZ {
     error BuySellGENZ__GENZMintFailedError();
     error BuySellGENZ__ImmutableChangesError();
     error BuySellGENZ__TransactionFailedError();
+    error BuySellGENZ__InsufficientBalanceError();
     error BuySellGENZ__ZeroAddressTransactionError();
 
 }
