@@ -117,6 +117,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
                 uint256 liquidatedAmount = (
                     (liquidationPercent * globalTokenBalance[rewardTokenAddresses[i]]) / 100
                 );
+                globalTokenBalance[rewardTokenAddresses[i]] -= liquidatedAmount;
                 IERC20Upgradeable token = IERC20Upgradeable(tokenAddresses[i]);
                 IERC20Upgradeable rewardToken = IERC20Upgradeable(rewardTokenAddresses[i]);
                 rewardToken.safeIncreaseAllowance(address(_interfaceAAVEV3), liquidatedAmount);
@@ -126,7 +127,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
                 uint256 amountLiquidated = balanceAfterRedeem - balanceBeforeRedeem;
                 token.safeTransfer(claimSettlementAddress, amountLiquidated);
             }
-            
+            ++i;
         }
     }
 

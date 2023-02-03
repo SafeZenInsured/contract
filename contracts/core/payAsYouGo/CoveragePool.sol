@@ -54,6 +54,7 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
     struct UserInfo {
         bool isActiveInvested;
         uint256 startVersionBlock;
+        uint256 depositedAmount;
     }
 
     /// @dev collects underwriters' account balance incl. deposits and withdrawals
@@ -151,6 +152,7 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
             userInfo.startVersionBlock = currVersion;
             userInfo.isActiveInvested = true;
         }
+        userInfo.depositedAmount += amountInSZT;
         userPoolBalanceSZT[_msgSender()] += amountInSZT;
         _insuranceRegistry.addInsuranceLiquidity(categoryID, subCategoryID, amountPaidInDAI);
         _tokenPermitDAI.safePermit(_msgSender(), address(this), amountPaidInDAI, deadline, v, r, s);
@@ -213,6 +215,7 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         }
         totalTokensStaked -= value;
         userPoolBalanceSZT[_msgSender()] -= value;
+        usersInfo[_msgSender()][categoryID][subCategoryID].depositedAmount -= value;
         bool removeSuccess = _insuranceRegistry.removeInsuranceLiquidity(subCategoryID, subCategoryID, value);
         bool sellSuccess = _buySellSZT.sellSZTToken(_msgSender(), value, deadline, v, r, s);
         _tokenSZT.safeTransfer(address(_buySellSZT), value);
@@ -276,9 +279,11 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         return underwritersBalance[_msgSender()][categoryID][subCategoryID][version].withdrawnAmount;
     }
 
-    function getunderwriterCoveragePoolAmount(
-        
-    ) external {
-
+    function getUserCoveragePoolAmount(
+        address userAddress,
+        uint256 categoryID, 
+        uint256 subCategoryID
+    ) external view returns(uint256) {
+        return usersInfo[userAddress][categoryID][subCategoryID].depositedAmount;
     }
 }
