@@ -96,6 +96,12 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
     /// more the number, more the risky the platform will be
     mapping(uint256 => mapping(uint256 => uint256)) public protocolSpecificClaims;
 
+    /// @custom:oz-upgrades-unsafe-allow-constructor
+    constructor(address tokenDAI) {
+        _tokenDAI = IERC20Upgradeable(tokenDAI); // Immutable
+        _tokenPermitDAI = IERC20PermitUpgradeable(tokenDAI); //Immutable
+    }
+
     function initialize(
         address safezenGovernanceTokenAddress,
         address globalPauseOperationAddress

@@ -163,11 +163,9 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
         StakeInformation storage userStakeInformation = stakingInformation[_msgSender()];
         userStakeInformation.amount += value;
         userStakeInformation.hasStaked = true;
-        userStakeInformation.minWithdrawTime = _minWithdrawalPeriod;
+        userStakeInformation.minWithdrawTime = block.timestamp + _minWithdrawalPeriod;
         _tokenPermitDAI.safePermit(_msgSender(), address(this), amountToBePaid, deadline, v, r, s);
         _tokenDAI.safeTransferFrom(_msgSender(), address(this), amountToBePaid);
-        /// when someone purchases tokens, check how much platform has earned and update
-        /// distributed amount to previous version block
         return true;
     }
 

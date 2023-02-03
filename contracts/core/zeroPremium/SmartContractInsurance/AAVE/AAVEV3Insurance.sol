@@ -169,6 +169,16 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
 
         _interfaceAAVEV3.supply(tokenAddress, amount, address(this), 0);
         uint256 balanceAfterSupply = rewardToken.balanceOf(address(this));
+        updateInfo(rewardTokenAddress, balanceAfterSupply, balanceBeforeSupply);
+        emit SuppliedToken(_msgSender(), tokenAddress, amount);
+        return true;
+    }
+
+    function updateInfo(
+        address rewardTokenAddress, 
+        uint256 balanceAfterSupply,
+        uint256 balanceBeforeSupply
+    ) private {
         uint256 tokenSupplied = balanceAfterSupply - balanceBeforeSupply;
         rewardInfo[rewardTokenAddress][_childVersion].tokenBalance += tokenSupplied;
         rewardInfo[rewardTokenAddress][_childVersion - 1].amountToBeDistributed = (
@@ -177,8 +187,6 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         );
         userTransactionInfo[_msgSender()][rewardTokenAddress][_childVersion].depositedAmount += tokenSupplied;
         globalTokenBalance[rewardTokenAddress] += tokenSupplied;
-        emit SuppliedToken(_msgSender(), tokenAddress, amount);
-        return true;
     }
 
     /// @dev to withdraw the tokens from the AAVE v3 lending pool

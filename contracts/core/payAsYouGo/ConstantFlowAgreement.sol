@@ -463,4 +463,12 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
        UserGlobalInsuranceInfo memory userGlobalInsuranceInfo = usersGlobalInsuranceInfo[userAddress];
         return userGlobalInsuranceInfo.globalInsuranceCost; 
     }
+
+    function getUserInsuredAmount(
+        address userAddress, 
+        uint256 categoryID, 
+        uint256 subCategoryID
+    ) external view returns(uint256) {
+        return usersInsuranceInfo[userAddress][categoryID][subCategoryID].insuredAmount;
+    }
 }

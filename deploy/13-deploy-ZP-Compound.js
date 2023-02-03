@@ -1,8 +1,11 @@
 module.exports = async ({ deployments, getChainId }) => {
     const { save } = deployments
+
+    const GLOBAL_PAUSE_CONTRACT = await ethers.getContract("GlobalPauseOperation");
+    const GLOBAL_PAUSE_ADDRESS = GLOBAL_PAUSE_CONTRACT.address;
     
     const ZP_COMPOUND_CONTRACT = await ethers.getContractFactory("CompoundV2Insurance");
-    const ZP_COMPOUND = await upgrades.deployProxy(ZP_COMPOUND_CONTRACT, [], {
+    const ZP_COMPOUND = await upgrades.deployProxy(ZP_COMPOUND_CONTRACT, [GLOBAL_PAUSE_ADDRESS], {
         constructorArgs: [], 
     });
     await ZP_COMPOUND.deployed();

@@ -6,6 +6,7 @@ pragma solidity 0.8.16;
 
 /// Importing required interfaces
 import "./../../../../interfaces/Compound/ICErc20.sol";
+import "./../../../../interfaces/IGlobalPauseOperation.sol";
 import "./../../../../interfaces/ISmartContractZPController.sol";
 import "./../../../../interfaces/Compound/ICompoundImplementation.sol";
 
@@ -25,6 +26,7 @@ contract CompoundV2Insurance is ICompoundImplementation, BaseUpgradeablePausable
     uint256 private _initVersion;
     uint256 private _childVersion;
     ISmartContractZPController private _zpController;
+    IGlobalPauseOperation private _globalPauseOperation;
     
     struct UserInfo {
         bool isActiveInvested;
@@ -51,7 +53,17 @@ contract CompoundV2Insurance is ICompoundImplementation, BaseUpgradeablePausable
     /// Maps reward address => Child Version => reward balance
     mapping(address => mapping(uint256 => RewardInfo)) private rewardInfo;
 
-    function initialize() external initializer {
+    mapping(address => uint256) private globalRewardTokenBalance;
+
+    modifier ifNotPaused() {
+        require(
+            (paused() != true) && 
+            (_globalPauseOperation.isPaused() != true));
+        _;
+    }
+
+    function initialize(address pauseOperationAddress) external initializer {
+        _globalPauseOperation = IGlobalPauseOperation(pauseOperationAddress);
         __BaseUpgradeablePausable_init(_msgSender());
     }
 
@@ -74,6 +86,34 @@ contract CompoundV2Insurance is ICompoundImplementation, BaseUpgradeablePausable
             revert Compound_ZP__WrongInfoEnteredError();
         }
         _protocolID = protocolID;
+    }
+
+    function liquidateTokens(
+        address[] memory tokenAddresses,
+        address[] memory rewardTokenAddresses,
+        address claimSettlementAddress,
+        uint256 protocolRiskCategory,
+        uint256 liquidationPercent
+    ) external onlyAdmin {
+        uint256 tokenCount = rewardTokenAddresses.length;
+        for(uint256 i = 0; i < tokenCount;) {
+            if(_zpController.getProtocolRiskCategory(_protocolID) == protocolRiskCategory) {
+                uint256 liquidatedAmount = (
+                    (liquidationPercent * globalRewardTokenBalance[rewardTokenAddresses[i]]) / 100
+                );
+                globalRewardTokenBalance[rewardTokenAddresses[i]] -= liquidatedAmount;
+                IERC20Upgradeable token = IERC20Upgradeable(tokenAddresses[i]);
+                uint256 balanceBeforeRedeem = token.balanceOf(address(this));
+                uint256 redeemResult = ICErc20(rewardTokenAddresses[i]).redeemUnderlying(liquidatedAmount);
+                if (redeemResult != 0){
+                    revert Compound_ZP__TransactionFailedError();
+                }
+                uint256 balanceAfterRedeem = token.balanceOf(address(this));
+                uint256 amountLiquidated = balanceAfterRedeem - balanceBeforeRedeem;
+                token.safeTransfer(claimSettlementAddress, amountLiquidated);
+            }
+            ++i;
+        }
     }
 
     function supplyToken(
@@ -120,12 +160,14 @@ contract CompoundV2Insurance is ICompoundImplementation, BaseUpgradeablePausable
         uint256 balanceAfterSupply,
         uint256 balanceBeforeSupply
     ) private {
-        rewardInfo[rewardTokenAddress][_childVersion].rewardTokenBalance += (balanceAfterSupply - balanceBeforeSupply);
+        uint256 tokenRewarded = (balanceAfterSupply - balanceBeforeSupply);
+        rewardInfo[rewardTokenAddress][_childVersion].rewardTokenBalance += tokenRewarded;
         rewardInfo[rewardTokenAddress][_childVersion - 1].amountToBeDistributed = (
             balanceBeforeSupply - 
             rewardInfo[rewardTokenAddress][_childVersion - 1].rewardTokenBalance
         );
-        userTransactionInfo[_msgSender()][rewardTokenAddress][_childVersion].depositedAmount += (balanceAfterSupply - balanceBeforeSupply);
+        userTransactionInfo[_msgSender()][rewardTokenAddress][_childVersion].depositedAmount += tokenRewarded;
+        globalRewardTokenBalance[rewardTokenAddress] += tokenRewarded;
     }
 
     function withdrawToken(
@@ -161,6 +203,7 @@ contract CompoundV2Insurance is ICompoundImplementation, BaseUpgradeablePausable
         }
         uint256 balanceAfterRedeem = token.balanceOf(address(this));
         uint256 amountToBePaid = (balanceAfterRedeem - balanceBeforeRedeem);
+        globalRewardTokenBalance[rewardTokenAddress] -= amount;
         token.safeTransfer(_msgSender(), amountToBePaid);
         return true;
     }
