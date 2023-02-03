@@ -1,0 +1,56 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "IBuyGENZ",
+  "sourceName": "contracts/interfaces/IBuyGENZ.sol",
+  "abi": [
+    {
+      "inputs": [],
+      "name": "BuySellGENZ__GENZBurnFailedError",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "BuySellGENZ__GENZMintFailedError",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "BuySellGENZ__ImmutableChangesError",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "BuySellGENZ__InsufficientBalanceError",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "BuySellGENZ__LowAmountError",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "BuySellGENZ__LowSZTBalanceError",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "BuySellGENZ__PausedError",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "BuySellGENZ__TransactionFailedError",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "BuySellGENZ__ZeroAddressTransactionError",
+      "type": "error"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}

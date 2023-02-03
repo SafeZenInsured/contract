@@ -1,0 +1,234 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "IUiIncentiveDataProviderV3",
+  "sourceName": "contracts/interfaces/AAVE/IUiIncentiveDataProviderV3.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "contract IPoolAddressesProvider",
+          "name": "provider",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "user",
+          "type": "address"
+        }
+      ],
+      "name": "getUserReservesIncentivesData",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "address",
+              "name": "underlyingAsset",
+              "type": "address"
+            },
+            {
+              "components": [
+                {
+                  "internalType": "address",
+                  "name": "tokenAddress",
+                  "type": "address"
+                },
+                {
+                  "internalType": "address",
+                  "name": "incentiveControllerAddress",
+                  "type": "address"
+                },
+                {
+                  "components": [
+                    {
+                      "internalType": "string",
+                      "name": "rewardTokenSymbol",
+                      "type": "string"
+                    },
+                    {
+                      "internalType": "address",
+                      "name": "rewardOracleAddress",
+                      "type": "address"
+                    },
+                    {
+                      "internalType": "address",
+                      "name": "rewardTokenAddress",
+                      "type": "address"
+                    },
+                    {
+                      "internalType": "uint256",
+                      "name": "userUnclaimedRewards",
+                      "type": "uint256"
+                    },
+                    {
+                      "internalType": "uint256",
+                      "name": "tokenIncentivesUserIndex",
+                      "type": "uint256"
+                    },
+                    {
+                      "internalType": "int256",
+                      "name": "rewardPriceFeed",
+                      "type": "int256"
+                    },
+                    {
+                      "internalType": "uint8",
+                      "name": "priceFeedDecimals",
+                      "type": "uint8"
+                    },
+                    {
+                      "internalType": "uint8",
+                      "name": "rewardTokenDecimals",
+                      "type": "uint8"
+                    }
+                  ],
+                  "internalType": "struct IUiIncentiveDataProviderV3.UserRewardInfo[]",
+                  "name": "userRewardsInformation",
+                  "type": "tuple[]"
+                }
+              ],
+              "internalType": "struct IUiIncentiveDataProviderV3.UserIncentiveData",
+              "name": "aTokenIncentivesUserData",
+              "type": "tuple"
+            },
+            {
+              "components": [
+                {
+                  "internalType": "address",
+                  "name": "tokenAddress",
+                  "type": "address"
+                },
+                {
+                  "internalType": "address",
+                  "name": "incentiveControllerAddress",
+                  "type": "address"
+                },
+                {
+                  "components": [
+                    {
+                      "internalType": "string",
+                      "name": "rewardTokenSymbol",
+                      "type": "string"
+                    },
+                    {
+                      "internalType": "address",
+                      "name": "rewardOracleAddress",
+                      "type": "address"
+                    },
+                    {
+                      "internalType": "address",
+                      "name": "rewardTokenAddress",
+                      "type": "address"
+                    },
+                    {
+                      "internalType": "uint256",
+                      "name": "userUnclaimedRewards",
+                      "type": "uint256"
+                    },
+                    {
+                      "internalType": "uint256",
+                      "name": "tokenIncentivesUserIndex",
+                      "type": "uint256"
+                    },
+                    {
+                      "internalType": "int256",
+                      "name": "rewardPriceFeed",
+                      "type": "int256"
+                    },
+                    {
+                      "internalType": "uint8",
+                      "name": "priceFeedDecimals",
+                      "type": "uint8"
+                    },
+                    {
+                      "internalType": "uint8",
+                      "name": "rewardTokenDecimals",
+                      "type": "uint8"
+                    }
+                  ],
+                  "internalType": "struct IUiIncentiveDataProviderV3.UserRewardInfo[]",
+                  "name": "userRewardsInformation",
+                  "type": "tuple[]"
+                }
+              ],
+              "internalType": "struct IUiIncentiveDataProviderV3.UserIncentiveData",
+              "name": "vTokenIncentivesUserData",
+              "type": "tuple"
+            },
+            {
+              "components": [
+                {
+                  "internalType": "address",
+                  "name": "tokenAddress",
+                  "type": "address"
+                },
+                {
+                  "internalType": "address",
+                  "name": "incentiveControllerAddress",
+                  "type": "address"
+                },
+                {
+                  "components": [
+                    {
+                      "internalType": "string",
+                      "name": "rewardTokenSymbol",
+                      "type": "string"
+                    },
+                    {
+                      "internalType": "address",
+                      "name": "rewardOracleAddress",
+                      "type": "address"
+                    },
+                    {
+                      "internalType": "address",
+                      "name": "rewardTokenAddress",
+                      "type": "address"
+                    },
+                    {
+                      "internalType": "uint256",
+                      "name": "userUnclaimedRewards",
+                      "type": "uint256"
+                    },
+                    {
+                      "internalType": "uint256",
+                      "name": "tokenIncentivesUserIndex",
+                      "type": "uint256"
+                    },
+                    {
+                      "internalType": "int256",
+                      "name": "rewardPriceFeed",
+                      "type": "int256"
+                    },
+                    {
+                      "internalType": "uint8",
+                      "name": "priceFeedDecimals",
+                      "type": "uint8"
+                    },
+                    {
+                      "internalType": "uint8",
+                      "name": "rewardTokenDecimals",
+                      "type": "uint8"
+                    }
+                  ],
+                  "internalType": "struct IUiIncentiveDataProviderV3.UserRewardInfo[]",
+                  "name": "userRewardsInformation",
+                  "type": "tuple[]"
+                }
+              ],
+              "internalType": "struct IUiIncentiveDataProviderV3.UserIncentiveData",
+              "name": "sTokenIncentivesUserData",
+              "type": "tuple"
+            }
+          ],
+          "internalType": "struct IUiIncentiveDataProviderV3.UserReserveIncentiveData[]",
+          "name": "",
+          "type": "tuple[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}
