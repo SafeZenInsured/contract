@@ -30,14 +30,12 @@ module.exports = async ({ deployments, getChainId }) => {
         console.log(`BuySellSZT Contract has been deployed on ${BUYSELLSZT.address} address.`)
 
     } else {
-        DAI_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F"
-        LUSD_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F"
+        POLYGON_NETWORK_DAI_ADDRESS = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"
 
         const BUYSELLSZT_CONTRACT = await ethers.getContractFactory("BuySellSZT");
         const BUYSELLSZT = await upgrades.deployProxy(BUYSELLSZT_CONTRACT, [], {
-            constructorArgs: [VALUE, DECIMALS, DAI_ADDRESS, LUSD_ADDRESS], 
+            constructorArgs: [VALUE, DECIMALS, POLYGON_NETWORK_DAI_ADDRESS], 
             unsafeAllow: ['constructor', 'state-variable-immutable'],
-            // initializer: initialize,
         });
         await BUYSELLSZT.deployed();
         console.log("Proxy deployed at:", BUYSELLSZT.address);

@@ -23,7 +23,11 @@ interface IClaim {
         uint256 categoryID,
         uint256 subCategoryID, 
         string memory proof, 
-        uint256 requestedClaimAmount
+        uint256 requestedClaimAmount,
+        uint256 deadline, 
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s
     ) external returns(bool); 
 
     function vote(
@@ -35,7 +39,13 @@ interface IClaim {
         uint256 claimID
     ) external returns(bool);
 
-    function challengeDecision(uint256 claimID) external;
+    function challengeDecision(
+        uint256 claimID,
+        uint256 deadline, 
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s
+    ) external;
 
     function viewVoteReceipt(
         uint256 claimID

@@ -4,6 +4,7 @@ pragma solidity 0.8.16;
 interface IAAVEImplementation {
 
     /// Custom Error Codes
+    error AAVEV3Insurance_ZP__TransactionFailedError();
     error AAVE_ZP__LowSupplyAmountError(uint256 errorLineNumber);
     error AAVE_ZP__WrongInfoEnteredError(uint256 errorLineNumber);
     error AAVE_ZP__ImmutableChangesError(uint256 errorLineNumber);

@@ -1,14 +1,7 @@
-/// Order of deployments:
-
-/// GlobalPauseOperation, DAI, LUSD, 
-
-/// Init functions contracts:
-/// BuySellSZT
-
 module.exports = async ({ deployments, getChainId }) => {
     const { save } = deployments
-
     const chainID = await getChainId()
+
     if (chainID != 31337) {
         const DAIERC20_CONTRACT = await ethers.getContractFactory("MockDAI");
         const DAI_INSTANCE = await upgrades.deployProxy(

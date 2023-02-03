@@ -145,7 +145,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID
-    ) internal returns(bool) {
+    ) private returns(bool) {
         uint256 newInsuredAmount = usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].insuredAmount + insuredAmount;
         if (usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].isValid) {
             bool closeStreamSuccess = deactivateInsurance(_msgSender(), categoryID, subCategoryID);
@@ -182,7 +182,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 categoryID, 
         uint256 subCategoryID,
         bool closeStream
-    ) internal returns(bool) {
+    ) private returns(bool) {
         if (!usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].isValid) {
             revert CFA__InactiveInsuranceError();
         }
@@ -231,7 +231,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 insuredAmount,
         uint256 categoryID,
         uint256 subCategoryID
-    ) internal returns(bool) {
+    ) private returns(bool) {
         if (insuredAmount < 1e18) {
             revert CFA__InsuranceCoverNotAvailableError();
         }
@@ -283,7 +283,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         address userAddress, 
         uint256 categoryID, 
         uint256 subCategoryID
-    ) internal returns(bool) {
+    ) private returns(bool) {
         UserInsuranceInfo storage userInsuranceInfo = usersInsuranceInfo[userAddress][categoryID][subCategoryID];
         if (!userInsuranceInfo.isValid) {
             revert CFA__InactiveInsuranceError();

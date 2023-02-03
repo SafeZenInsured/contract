@@ -275,4 +275,10 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
     ) external view override returns(uint256) {
         return underwritersBalance[_msgSender()][categoryID][subCategoryID][version].withdrawnAmount;
     }
+
+    function getunderwriterCoveragePoolAmount(
+        
+    ) external {
+
+    }
 }

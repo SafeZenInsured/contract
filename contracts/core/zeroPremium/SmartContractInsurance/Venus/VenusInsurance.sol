@@ -17,7 +17,7 @@ import "./../../../../BaseUpgradeablePausable.sol";
 
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
-contract CompoundPool is ICompoundImplementation, BaseUpgradeablePausable {
+contract VenusInsurance is ICompoundImplementation, BaseUpgradeablePausable {
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
@@ -106,18 +106,26 @@ contract CompoundPool is ICompoundImplementation, BaseUpgradeablePausable {
         token.safeIncreaseAllowance(rewardTokenAddress, amount);
         
         uint mintResult = ICErc20(rewardTokenAddress).mint(amount);
-        if (mintResult == 0){
+        if (mintResult != 0){
             revert Compound_ZP__TransactionFailedError();
         }
         uint256 balanceAfterSupply = rewardToken.balanceOf(address(this));
+        updateInfo(rewardTokenAddress, balanceAfterSupply, balanceBeforeSupply);
+        emit SuppliedToken(_msgSender(), tokenAddress, amount);
+        return true;
+    }
+
+    function updateInfo(
+        address rewardTokenAddress, 
+        uint256 balanceAfterSupply,
+        uint256 balanceBeforeSupply
+    ) private {
         rewardInfo[rewardTokenAddress][_childVersion].rewardTokenBalance += (balanceAfterSupply - balanceBeforeSupply);
         rewardInfo[rewardTokenAddress][_childVersion - 1].amountToBeDistributed = (
             balanceBeforeSupply - 
             rewardInfo[rewardTokenAddress][_childVersion - 1].rewardTokenBalance
         );
         userTransactionInfo[_msgSender()][rewardTokenAddress][_childVersion].depositedAmount += (balanceAfterSupply - balanceBeforeSupply);
-        emit SuppliedToken(_msgSender(), tokenAddress, amount);
-        return true;
     }
 
     function withdrawToken(
@@ -148,7 +156,7 @@ contract CompoundPool is ICompoundImplementation, BaseUpgradeablePausable {
 
         uint256 balanceBeforeRedeem = token.balanceOf(address(this));
         uint256 redeemResult = ICErc20(rewardTokenAddress).redeemUnderlying(amount);
-        if (redeemResult == 0){
+        if (redeemResult != 0){
             revert Compound_ZP__TransactionFailedError();
         }
         uint256 balanceAfterRedeem = token.balanceOf(address(this));

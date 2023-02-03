@@ -4,10 +4,10 @@ pragma solidity 0.8.16;
 /// @title AAVE Zero Premium Insurance Contract
 /// @author Anshik Bansal <anshik@safezen.finance>
 
-import "./AAVE.sol";
+import "./AAVEV3Insurance.sol";
 import "./../../../../interfaces/IERC20Extended.sol";
 
-contract MockAAVE is AAVE {
+contract MockAAVEV3Insurance is AAVEV3Insurance {
 
     function mintERC20Tokens(address tokenAddress, uint256 amount) public {
         IERC20Extended(tokenAddress).mint(msg.sender, amount);

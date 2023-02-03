@@ -23,14 +23,14 @@ contract SmartContractZPController is ISmartContractZPController, BaseUpgradeabl
     struct ProtocolInfo {
         string protocolName;
         address deployedAddress;
+        bool isCommunityGoverned;
+        uint256 riskPoolCategory;
         uint256 startVersionBlock;
-        uint256 lastUpdatedVersionBlock;
     }
 
     struct ProtocolRiskInfo {
         bool isUpdated;
         bool isCommunityGoverned;
-        uint256 riskFactor;
         uint256 riskPoolCategory; // low = 1, medium = 2, or high = 3, notCovered = 4
     }
 
@@ -47,12 +47,6 @@ contract SmartContractZPController is ISmartContractZPController, BaseUpgradeabl
         __BaseUpgradeablePausable_init(_msgSender());
     }
 
-    function updateRiskFactor(uint256 protocolID_, uint256 riskFactor) external onlyAdmin {
-        ProtocolRiskInfo storage protocolRiskInfo = protocolsRiskInfo[protocolID_][latestVersion + 1];
-        protocolRiskInfo.riskFactor = riskFactor;
-        _addNewVersion();
-    }
-
     function liquidateRiskPool(uint256 riskPoolCategory, uint256 liquidationFactor) external onlyAdmin {
         versionLiquidationFactor[latestVersion].liquidation = liquidationFactor;
         versionLiquidationFactor[latestVersion].riskPoolCategory = riskPoolCategory;
@@ -60,12 +54,18 @@ contract SmartContractZPController is ISmartContractZPController, BaseUpgradeabl
     }
 
     /// first adding a new version to ensure that risk category is applied from the time this function gets called
-    function updateRiskPoolCategory(uint256 protocolID_, uint256 riskPoolCategory) external onlyAdmin {
+    function updateRiskPoolCategory(
+        uint256 protocolID_, 
+        uint256 riskPoolCategory,
+        bool isCommunityGoverned
+    ) external onlyAdmin {
         uint latestVersion_ = latestVersion + 1;
         ProtocolRiskInfo storage protocolRiskInfo = protocolsRiskInfo[protocolID_][latestVersion_];
         protocolRiskInfo.isUpdated = true;
         protocolRiskInfo.riskPoolCategory = riskPoolCategory;
-        protocolsInfo[protocolID_].lastUpdatedVersionBlock = latestVersion_;
+        protocolRiskInfo.isCommunityGoverned = isCommunityGoverned;
+        protocolsInfo[protocolID_].riskPoolCategory = riskPoolCategory;
+        protocolsInfo[protocolID_].isCommunityGoverned = isCommunityGoverned;
         _addNewVersion();
     }
 
@@ -73,7 +73,6 @@ contract SmartContractZPController is ISmartContractZPController, BaseUpgradeabl
         string memory protocolName,
         address deployedAddress,
         bool isCommunityGoverned,
-        uint256 riskFactor,
         uint256 riskPoolCategory
     ) external onlyAdmin {
         ++protocolID;
@@ -81,11 +80,11 @@ contract SmartContractZPController is ISmartContractZPController, BaseUpgradeabl
         protocolInfo.protocolName = protocolName;
         protocolInfo.deployedAddress = deployedAddress;
         protocolInfo.startVersionBlock = latestVersion + 1;
-        protocolInfo.lastUpdatedVersionBlock = latestVersion + 1;
+        protocolInfo.riskPoolCategory = riskPoolCategory;
+        protocolInfo.isCommunityGoverned = isCommunityGoverned;
         ProtocolRiskInfo storage protocolRiskInfo = protocolsRiskInfo[protocolID][latestVersion + 1];
         protocolRiskInfo.isUpdated = true;
         protocolRiskInfo.isCommunityGoverned = isCommunityGoverned;
-        protocolRiskInfo.riskFactor = riskFactor;
         protocolRiskInfo.riskPoolCategory = riskPoolCategory;
         _addNewVersion();
         emit NewProtocolAdded(protocolID, protocolName);
@@ -101,6 +100,10 @@ contract SmartContractZPController is ISmartContractZPController, BaseUpgradeabl
     ) external view returns(string memory protocolName, address protocolAddress) {
         ProtocolInfo storage protocolInfo = protocolsInfo[protocolID_];
         return (protocolInfo.protocolName, protocolInfo.deployedAddress);
+    }
+
+    function getProtocolRiskCategory(uint256 protocolID_) external view returns(uint256) {
+        return protocolsInfo[protocolID_].riskPoolCategory;
     }
 
     function getProtocolRiskCategory(uint256 protocolID_, uint256 version) external view returns (uint256) {

@@ -26,15 +26,19 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
     /// TIME_BEFORE_VOTING_START: time before voting starts, so as users can be notified
     /// AFTER_VOTING_WAIT_PERIOD: voting challenge duration
     uint256 public claimID;
+    uint256 private _stakedAmount;
     uint256 private _openClaimsCount;
     uint256 private constant VOTING_END_TIME = 5 minutes;
     uint256 private constant TIME_BEFORE_VOTING_START = 1 minutes;
     uint256 private constant AFTER_VOTING_WAIT_PERIOD = 1 minutes;
     
     using SafeERC20Upgradeable for IERC20Upgradeable;
+    using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
     /// _tokenGSZT: SafeZen Governance contract
     /// _globalPauseOperation: Pause Operation contract
+    IERC20Upgradeable private _tokenDAI;
+    IERC20PermitUpgradeable private _tokenPermitDAI;
     IERC20Upgradeable private _tokenGSZT;
     IGlobalPauseOperation private _globalPauseOperation;
 
@@ -90,20 +94,13 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
 
     /// @notice mapping the protocol specific claims count to date
     /// more the number, more the risky the platform will be
-    mapping(uint256 => uint256) public protocolSpecificClaims;
-    
-    modifier ifNotPaused() {
-        require(
-            (paused() != true) && 
-            (_globalPauseOperation.isPaused() != true));
-        _;
-    }
+    mapping(uint256 => mapping(uint256 => uint256)) public protocolSpecificClaims;
 
     function initialize(
         address safezenGovernanceTokenAddress,
         address globalPauseOperationAddress
     ) external initializer {
-        claimID = 0;
+        _stakedAmount = 10e18;
         _tokenGSZT = IERC20Upgradeable(safezenGovernanceTokenAddress);
         _globalPauseOperation = IGlobalPauseOperation(globalPauseOperationAddress);
         __BaseUpgradeablePausable_init(_msgSender());
@@ -119,7 +116,10 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
 
     /// @dev in case if certain claim require additional time for DAO, 
     /// for e.g., awaiting additional inputs to reserve their decisions 
-    function updateVotingEndTime(uint256 _claimID, uint256 timeInHours) external onlyAdmin {
+    function updateVotingEndTime(
+        uint256 _claimID, 
+        uint256 timeInHours
+    ) external onlyAdmin {
         claims[_claimID].votingInfo[_claimID].votingEndTime = timeInHours * 1 hours;
     }
 
@@ -127,11 +127,19 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
         isAdvisor[userAddress] = true;
     }
 
+    function updateStakeAmount(uint256 stakeAmount) external onlyAdmin {
+        _stakedAmount = stakeAmount;
+    }
+
     function createClaim(
         uint256 categoryID,
         uint256 subcategoryID, 
         string memory proof, 
-        uint256 requestedClaimAmount
+        uint256 requestedClaimAmount,
+        uint256 deadline, 
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s
     ) public override returns(bool) {
         ++claimID;
         Claim storage newClaim = claims[claimID];
@@ -144,12 +152,14 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
         newClaim.votingInfo[claimID].votingStartTime = block.timestamp + TIME_BEFORE_VOTING_START;
         newClaim.votingInfo[claimID].votingEndTime = newClaim.votingInfo[claimID].votingStartTime + VOTING_END_TIME;
         ++individualClaims[_msgSender()];
-        ++protocolSpecificClaims[subcategoryID];
+        ++protocolSpecificClaims[categoryID][subcategoryID];
         ++_openClaimsCount;
         bool success = _globalPauseOperation.pauseOperation();
         if(!success) {
             revert Claim__PausedOperationFailedError();
         }
+        _tokenPermitDAI.safePermit(_msgSender(), address(this), _stakedAmount, deadline, v, r, s);
+        _tokenDAI.safeTransfer(address(this), _stakedAmount);
         emit NewClaimCreated(_msgSender(), claimID, proof);
         return true;
     }
@@ -195,25 +205,47 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
         return true;
     }
 
+    /// @dev this function aims to finalize the claim decision, based on the claim voting
+    /// @param _claimID: unique insurance claim ID
     function claimDecision(uint256 _claimID) external override returns(bool) {
-        if ((claims[_claimID].votingInfo[_claimID].votingEndTime + AFTER_VOTING_WAIT_PERIOD) > block.timestamp) {
+        if (
+            (claims[_claimID].votingInfo[_claimID].votingEndTime + AFTER_VOTING_WAIT_PERIOD) > 
+            block.timestamp
+        ) {
             revert Claim__VotingDecisionNotYetFinalizedError();
         }
         if (claims[_claimID].isChallenged) {
             revert Claim__DecisionChallengedError();
         }
-        uint256 totalCommunityVotes = claims[_claimID].votingInfo[_claimID].forVotes + claims[_claimID].votingInfo[_claimID].againstVotes;
+        uint256 totalCommunityVotes = (
+            claims[_claimID].votingInfo[_claimID].forVotes + 
+            claims[_claimID].votingInfo[_claimID].againstVotes
+        );
         if (claims[_claimID].votingInfo[_claimID].votingCounts == 2) {
-            uint256 totalAdvisorVotes = claims[_claimID].votingInfo[_claimID].advisorForVotes + claims[_claimID].votingInfo[_claimID].advisorAgainstVotes;
-            uint256 forAdvisorVotesEligible = (claims[_claimID].votingInfo[_claimID].advisorForVotes >= claims[_claimID].votingInfo[_claimID].advisorAgainstVotes) ? ((claims[claimID].votingInfo[claimID].forVotes * 100) / totalAdvisorVotes) : 0;
+            uint256 totalAdvisorVotes = (
+                claims[_claimID].votingInfo[_claimID].advisorForVotes + 
+                claims[_claimID].votingInfo[_claimID].advisorAgainstVotes
+            );
+            uint256 forAdvisorVotesEligible = (
+                (claims[_claimID].votingInfo[_claimID].advisorForVotes >= 
+                claims[_claimID].votingInfo[_claimID].advisorAgainstVotes) ? 
+                ((claims[claimID].votingInfo[claimID].forVotes * 100) / totalAdvisorVotes) : 0
+            );
             /// even if all the community votes are in favor, but, 49% of the voting power will be 
             /// given to the advisors in the final claim decision round.
             /// Community --> (100 * 0.51) = 51%    Advisors -->  (60 * 0.49) = 29.4%
             /// Total  = 51% + 29.4% < 80% (needed to get approved)
-            /// keeping >= 59 because of underflow value in forAdvisorVotesEligible
+            /// keeping >= 59% instead of 60% because of underflow value in forAdvisorVotesEligible
             if (forAdvisorVotesEligible >= 59) {
-                uint256 forVotesEligible = (claims[_claimID].votingInfo[_claimID].forVotes > claims[_claimID].votingInfo[_claimID].againstVotes) ? ((claims[_claimID].votingInfo[_claimID].forVotes * 100) / totalCommunityVotes) : 1;
-                uint256 supportPercent = ((forAdvisorVotesEligible * 49) / 100) + ((forVotesEligible * 51) / 100);
+                uint256 forVotesEligible = (
+                    (claims[_claimID].votingInfo[_claimID].forVotes > 
+                    claims[_claimID].votingInfo[_claimID].againstVotes) ? 
+                    ((claims[_claimID].votingInfo[_claimID].forVotes * 100) / totalCommunityVotes) : 1
+                );
+                uint256 supportPercent = (
+                    ((forAdvisorVotesEligible * 49) / 100) + 
+                    ((forVotesEligible * 51) / 100)
+                );
                 claims[_claimID].accepted = (supportPercent >= 80) ? true : false;
             }
             else {
@@ -222,16 +254,31 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
         }
         else {
             uint256 forVotesEligible = (
-                claims[_claimID].votingInfo[_claimID].forVotes > claims[_claimID].votingInfo[_claimID].againstVotes) ? ((claims[_claimID].votingInfo[_claimID].forVotes * 100) / totalCommunityVotes) : 1;
+                (claims[_claimID].votingInfo[_claimID].forVotes > 
+                claims[_claimID].votingInfo[_claimID].againstVotes) ? 
+                ((claims[_claimID].votingInfo[_claimID].forVotes * 100) / totalCommunityVotes) : 1
+            );
             claims[_claimID].accepted = (forVotesEligible >= 80) ? true : false;
         }
         claims[_claimID].closed = true;
+        if (claims[_claimID].accepted) {
+            uint256 totalAmountStaked = (
+                _stakedAmount * (claims[_claimID].votingInfo[_claimID].votingCounts + 1)
+            );
+            _tokenDAI.safeTransfer(claims[_claimID].claimer, totalAmountStaked);
+        }
         --_openClaimsCount;
         return true;
     }
 
     
-    function challengeDecision(uint256 _claimID) external override {
+    function challengeDecision(
+        uint256 _claimID,
+        uint256 deadline, 
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s
+    ) external override {
         if ((!claims[_claimID].closed) || (!claims[_claimID].isChallenged)) {
             revert Claim__DecisionNotYetTakenError();
         }
@@ -239,12 +286,16 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
             revert Claim__DecisionNoLongerCanBeChallengedError();
         }
         claims[_claimID].isChallenged = true;
-        ++claims[claimID].votingInfo[claimID].votingCounts; 
+        ++claims[claimID].votingInfo[claimID + 1].votingCounts; 
         createClaim(
             claims[_claimID].categoryID,
             claims[_claimID].subcategoryID,
             claims[_claimID].proof,
-            claims[_claimID].claimAmountRequested
+            claims[_claimID].claimAmountRequested,
+            deadline, 
+            v, 
+            r, 
+            s
         );
         
         // ^ global _claimID, as the latest claim refers to challenged claim
@@ -270,6 +321,14 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
         uint256, uint256, uint256, uint256, uint256, uint256, uint256
     ) {
         VotingInfo storage claim = claims[_claimID].votingInfo[_claimID];
-        return (claim.votingStartTime, claim.votingEndTime, claim.forVotes, claim.againstVotes, claim.advisorForVotes, claim.advisorAgainstVotes, claim.votingCounts);
+        return (
+            claim.votingStartTime, 
+            claim.votingEndTime, 
+            claim.forVotes, 
+            claim.againstVotes, 
+            claim.advisorForVotes, 
+            claim.advisorAgainstVotes, 
+            claim.votingCounts
+        );
     }
 }

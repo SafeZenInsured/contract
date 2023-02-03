@@ -116,7 +116,7 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
     function buySZTToken(
         address userAddress,
         uint256 amountInSZT
-    ) external nonReentrant ifNotPaused returns(bool) {
+    ) external ifNotPaused nonReentrant returns(bool) {
         if ((_tokenCounter < 1e18) && (amountInSZT < 1e18)) {
             revert BuySellSZT__LowAmountError();
         }
@@ -140,7 +140,7 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         uint8 v, 
         bytes32 r, 
         bytes32 s
-    ) external nonReentrant ifNotPaused returns(bool) {
+    ) external ifNotPaused nonReentrant returns(bool) {
         uint256 tokenCount = getTokenCounter();
         (/*amountPerToken*/, uint256 amountToBeReleased) = calculatePriceSZT(
             (tokenCount - value), tokenCount

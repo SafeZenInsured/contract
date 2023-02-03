@@ -15,6 +15,8 @@ interface ISmartContractZPController {
 
     function ifProtocolUpdated(uint256 protocolID_, uint256 version) external view returns (bool);
 
+    function getProtocolRiskCategory(uint256 protocolID_) external view returns(uint256);
+
     function getProtocolRiskCategory(uint256 protocolID_, uint256 version) external view returns (uint256);
 
     function isRiskPoolLiquidated(uint256 version, uint256 riskPoolCategory) external view returns (bool);

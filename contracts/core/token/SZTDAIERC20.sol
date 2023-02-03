@@ -21,7 +21,7 @@ error ERC20__InsufficientBalanceError();
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
 
-contract sztDAI is ERC20Upgradeable, IERC20Extended, ERC20PermitUpgradeable, BaseUpgradeablePausable {
+contract SZTDAI is ERC20Upgradeable, IERC20Extended, ERC20PermitUpgradeable, BaseUpgradeablePausable {
     uint256 private _initVersion;
     address public swapContractDAI;
     ICFA private _contractFlowAgreement;
@@ -35,8 +35,8 @@ contract sztDAI is ERC20Upgradeable, IERC20Extended, ERC20PermitUpgradeable, Bas
     }
 
     function initialize() external initializer {
-        __ERC20_init("szt DAI Stream Token", "sztDAI");
-        __ERC20Permit_init("sztDAI");
+        __ERC20_init("SZT DAI Stream Token", "SZTDAI");
+        __ERC20Permit_init("SZTDAI");
         __BaseUpgradeablePausable_init(_msgSender());
     }
 
