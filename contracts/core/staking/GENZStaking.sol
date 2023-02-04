@@ -21,10 +21,33 @@ error GENZStaking__NotAMinimumStakeAmountError();
 /// NOTE: Staking tokens would be used for activities like flash loans 
 /// to generate rewards for the staked users
 contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
+    uint256 private _currVersion;
     uint256 private _minStakeValue;
     uint256 private _withdrawTimer;
     uint256 public override totalTokensStaked;
     IERC20Upgradeable private immutable _tokenGENZ;
+
+    using SafeERC20Upgradeable for IERC20Upgradeable;
+
+    /// TODO: Versionable Info data to be included in functions
+    struct VersionableInfo {
+        uint256 startTime;
+        uint256 endTime;
+        uint256 distributedAmount;
+        uint256 tokenDistributed;
+    }
+
+    struct UserInfo {
+        bool hasStaked;
+        uint256 stakedTokens;
+        uint256 startVersionBlock; 
+        uint256 claimedRewards;
+    }
+
+    struct UserBalanceInfo {
+        uint256 stakedTokens;
+        uint256 withdrawnTokens;
+    }
 
     struct WithdrawWaitPeriod{
         bool ifTimerStarted;
@@ -32,24 +55,27 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
         uint256 canWithdrawTime;
     }
 
-    struct StakerInfo {
-        uint256 amountStaked;
-        uint256 rewardEarned;
-    }
-
-    mapping(address => StakerInfo) private stakers;
-
     mapping (address => WithdrawWaitPeriod) private checkWaitTime;
+
+    mapping(address => UserInfo) private usersInfo;
+
+    /// versionID => VersionableInfo
+    mapping(uint256 => VersionableInfo) private versionableInfos;
+
+    /// userAddress => versionID => UserBalanceInfo
+    mapping(address => mapping(uint256 => UserBalanceInfo)) private usersBalanceInfo;
 
     /// [PRODUCTION TODO: _withdrawTimer = timeInDays * 1 days;]
     constructor(
-        address tokenAddressGENZ, 
-        uint256 timeInDays
+        address tokenAddressGENZ
     ) {
         _minStakeValue = 1e18;
-        _withdrawTimer = timeInDays * 1 minutes;
         _tokenGENZ = IERC20Upgradeable(tokenAddressGENZ);
-        
+    }
+
+    function initialize(uint256 timeInDays) external initializer {
+        _withdrawTimer = timeInDays * 1 minutes;
+        __BaseUpgradeablePausable_init(_msgSender());
     }
 
     function pause() external onlyAdmin {
@@ -65,7 +91,7 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
         emit UpdatedMinStakingAmount(value);
     }
 
-    /// [PRODUCTION TODO: _withdrawTimer = timeInDays * 1 days;]
+    /// [PRODUCTION TODO: _withdrawTimer = timeInHours * 1 hours;]
     function setWithdrawTime(uint256 timeInMinutes) external onlyAdmin {
         _withdrawTimer = timeInMinutes * 1 minutes;
         emit UpdatedWithdrawTimer(timeInMinutes);
@@ -75,18 +101,21 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
         if (value < _minStakeValue) {
             revert GENZStaking__NotAMinimumStakeAmountError();
         }
-        StakerInfo storage staker = stakers[_msgSender()];
-        staker.amountStaked += value;
-        totalTokensStaked += value;
-        bool success = _tokenGENZ.transferFrom(_msgSender(), address(this), value);
-        if (!success) {
-            revert GENZStaking__TransactionFailedError();
+        ++_currVersion;
+        UserInfo storage userInfo = usersInfo[_msgSender()];
+        if(!userInfo.hasStaked) {
+            userInfo.hasStaked = true;
+            userInfo.startVersionBlock = _currVersion;
         }
+        userInfo.stakedTokens += value;
+        usersBalanceInfo[_msgSender()][_currVersion].stakedTokens = value;        
+        totalTokensStaked += value;
+        _tokenGENZ.safeTransferFrom(_msgSender(), address(this), value);
         emit StakedGENZ(_msgSender(), value);
         return true;
     }
     
-    // 48 hours waiting period
+    // 2 hours withdrawal period
     function activateWithdrawalTimer(uint256 value) external override returns(bool) {
         if (
             (!(checkWaitTime[_msgSender()].ifTimerStarted)) || 
@@ -102,33 +131,90 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
     }
     
     function withdrawGENZ(uint256 value) external override nonReentrant returns(bool) {
-        StakerInfo storage staker = stakers[_msgSender()];
+        UserInfo storage userInfo = usersInfo[_msgSender()];
         if (
-            (staker.amountStaked < value) || 
+            (userInfo.stakedTokens < value) || 
             (block.timestamp < checkWaitTime[_msgSender()].canWithdrawTime) || 
             (value > checkWaitTime[_msgSender()].GENZTokenCount)
         ) {
             revert GENZStaking__TransactionFailedError();
         }
+        ++_currVersion;
         totalTokensStaked -= value;
-        staker.amountStaked -= value;
+        userInfo.stakedTokens -= value;
+        usersBalanceInfo[_msgSender()][_currVersion].withdrawnTokens = value;
         if (checkWaitTime[_msgSender()].GENZTokenCount == value) {
             checkWaitTime[_msgSender()].ifTimerStarted = false;
         }
         checkWaitTime[_msgSender()].GENZTokenCount -= value;
-        bool success = _tokenGENZ.transfer(_msgSender(), value);
-        if (!success) {
-            revert GENZStaking__TransactionFailedError();
-        }
+        _tokenGENZ.safeTransfer(_msgSender(), value);
         emit UnstakedGENZ(_msgSender(), value);
         return true;
     }
 
-    function getUserStakedGENZBalance() external view override returns(uint256) {
-        return (stakers[_msgSender()].amountStaked > 0 ? stakers[_msgSender()].amountStaked : 0);
+    function getVersionID() public view returns(uint256) {
+        return _currVersion;
     }
 
-    function getStakerRewardInfo() external view returns(uint256) {
-        return stakers[_msgSender()].rewardEarned;
+    function getActiveVersionID() internal view returns(uint256[] memory) {
+        uint256 activeCount = 0;
+        uint256 userStartVersion = usersInfo[_msgSender()].startVersionBlock;
+        uint256 currVersion =  getVersionID();
+        for(uint256 i = userStartVersion; i <= currVersion;) {
+            if (usersBalanceInfo[_msgSender()][i].stakedTokens > 0) {
+                ++activeCount;
+            }
+            if (usersBalanceInfo[_msgSender()][i].withdrawnTokens > 0) {
+                ++activeCount;
+            }
+            ++i;
+        }
+        uint256[] memory activeVersionID = new uint256[](activeCount);
+        uint256 counter = 0;
+        for(uint i = userStartVersion; i <= currVersion;) {
+            UserBalanceInfo memory userBalance = usersBalanceInfo[_msgSender()][i];
+            if(userBalance.stakedTokens > 0) {
+                activeVersionID[counter] = i;
+            }
+            if(userBalance.withdrawnTokens > 0) {
+                activeVersionID[counter] = i;
+            }
+            ++counter;
+            ++i;
+        }
+        return activeVersionID;
+    }
+
+    function calculateRewards() external view returns(uint256) {
+        uint256 userBalance = 0;
+        uint256[] memory activeVersionID = getActiveVersionID();
+        uint256 startVersionID = activeVersionID[0];
+        uint256 userPremiumEarned = 0;
+        uint256 counter = 0;
+        for(uint256 i = startVersionID; i <= _currVersion;) {
+            UserBalanceInfo memory userVersionBalance = usersBalanceInfo[_msgSender()][i];
+            if(activeVersionID[counter] == i) {
+                if (userVersionBalance.stakedTokens > 0) {
+                    userBalance += userVersionBalance.stakedTokens;
+                }
+                else {
+                    userBalance -= userVersionBalance.withdrawnTokens;
+                }
+                ++counter;
+            }
+            VersionableInfo storage versionInfo = versionableInfos[i];           
+            uint256 duration = versionInfo.endTime - versionInfo.startTime;
+            userPremiumEarned += ((duration * userBalance * versionInfo.distributedAmount)/ (versionInfo.tokenDistributed));
+            ++i;
+        }
+        return userPremiumEarned;
+    }
+
+    function getUserStakedGENZBalance() external view override returns(uint256) {
+        return (usersInfo[_msgSender()].stakedTokens > 0 ? usersInfo[_msgSender()].stakedTokens : 0);
+    }
+
+    function getStakerClaimedRewardInfo() external view returns(uint256) {
+        return usersInfo[_msgSender()].claimedRewards;
     }
 }

@@ -9,6 +9,9 @@ import "./../../interfaces/ICFA.sol";
 import "./../../interfaces/IERC20Extended.sol";
 import "./../../interfaces/IInsuranceRegistry.sol";
 
+/// Importing required libraries
+import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
+
 /// Importing required contracts
 import "./../../BaseUpgradeablePausable.sol";
 
@@ -26,10 +29,14 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
     uint256 private _startWaitingTime;
     uint256 private _minimumInsurancePeriod;
 
+    using SafeERC20Upgradeable for IERC20Upgradeable;
+    using SafeERC20Upgradeable for IERC20PermitUpgradeable;
+
     /// _tokenDAI: DAI ERC20 token
     /// _sztDAI: sztDAI ERC20 token
     /// _insuranceRegistry: Insurance Registry Contract
     IERC20Upgradeable private _tokenDAI;
+    IERC20PermitUpgradeable private _tokenPermitDAI;
     IERC20Extended private _sztDAI;
     IInsuranceRegistry private _insuranceRegistry;
 
@@ -91,6 +98,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         _startWaitingTime = startWaitingTime * 1 minutes; 
         _minimumInsurancePeriod = minimumInsurancePeriod * 1 minutes;
         _tokenDAI = IERC20Upgradeable(tokenDAIaddress);
+        _tokenPermitDAI = IERC20PermitUpgradeable(tokenDAIaddress);
         _sztDAI = IERC20Extended(sztDAIAddress);
         _insuranceRegistry = IInsuranceRegistry(insuranceRegistryCA);
         __BaseUpgradeablePausable_init(_msgSender());
@@ -134,9 +142,12 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
     function addInsuranceAmount(
         uint256 insuredAmount, 
         uint256 categoryID, 
-        uint256 subCategoryID
+        uint256 subCategoryID, 
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s
     ) external override nonReentrant returns(bool) {
-        bool success = _addInsuranceAmount(insuredAmount, categoryID, subCategoryID);
+        bool success = _addInsuranceAmount(insuredAmount, categoryID, subCategoryID, v, r, s);
         return success;
     }
     
@@ -144,7 +155,10 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
     function _addInsuranceAmount(
         uint256 insuredAmount, 
         uint256 categoryID, 
-        uint256 subCategoryID
+        uint256 subCategoryID,
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s
     ) private returns(bool) {
         uint256 newInsuredAmount = usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].insuredAmount + insuredAmount;
         if (usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].isValid) {
@@ -152,11 +166,13 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
             if (!closeStreamSuccess) {
                 revert CFA__TransactionFailedError();
             }
-        }       
-        bool activateSuccess = activateInsurance(newInsuredAmount, categoryID, subCategoryID);
+        }   
+        uint256 deadline = block.timestamp + _maxInsuredDays + 30 days;  
+        (bool activateSuccess, uint256 insuranceCost) = activateInsurance(newInsuredAmount, categoryID, subCategoryID);
         if (!activateSuccess) {
             revert CFA__TransactionFailedError();
         }
+        _tokenPermitDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, v, r, s);  
         return true;
     }
 
@@ -170,9 +186,12 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID,
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s,
         bool closeStream
     ) external override nonReentrant returns(bool) {
-        bool success = _minusInsuranceAmount(insuredAmount, categoryID, subCategoryID, closeStream);
+        bool success = _minusInsuranceAmount(insuredAmount, categoryID, subCategoryID, v, r, s, closeStream);
         return success;
     }
     
@@ -181,6 +200,9 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID,
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s,
         bool closeStream
     ) private returns(bool) {
         if (!usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].isValid) {
@@ -192,10 +214,13 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         }
         if (!closeStream) {
             uint256 newInsuredAmount = usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].insuredAmount - insuredAmount;
-            bool activateSuccess = activateInsurance(newInsuredAmount, categoryID, subCategoryID);
+            uint256 deadline = block.timestamp + _maxInsuredDays + 30 days;
+            (bool activateSuccess, uint256 insuranceCost) = activateInsurance(newInsuredAmount, categoryID, subCategoryID);
             if (!activateSuccess) {
                 revert CFA__TransactionFailedError();
             }
+            _tokenPermitDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, v, r, s);  
+
         }
         return true;
     }
@@ -231,7 +256,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 insuredAmount,
         uint256 categoryID,
         uint256 subCategoryID
-    ) private returns(bool) {
+    ) private returns(bool, uint256) {
         if (insuredAmount < 1e18) {
             revert CFA__InsuranceCoverNotAvailableError();
         }
@@ -275,7 +300,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
             userGlobalInsuranceInfo.validTill : userInsuranceInfo.validTill
         );
         bool success = _insuranceRegistry.addCoverageOffered(categoryID, subCategoryID, insuredAmount, incomingAmountPerSec);
-        return success;
+        return (success, userInsuranceInfo.insuranceCost);
     }
 
     /// NOTE: few if and else to consider for globalinsuranceinfo like endtime and start time 
@@ -316,7 +341,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
     function deactivateCategoryInsurance(
         address userAddress, 
         uint256 categoryID
-    ) internal returns(bool) {
+    ) private returns(bool) {
         uint256[] memory activeID = findActivePremiumCost(userAddress, categoryID, _insuranceRegistry.getLatestSubCategoryID(categoryID));
         uint256 expectedAmountToBePaid = _calculateTotalFlowMade(userAddress, categoryID, activeID);
         for(uint256 i=0; i < activeID.length;) {
@@ -377,7 +402,11 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
             uint256[] memory activeID = findActivePremiumCost(userAddress, i, _insuranceRegistry.getLatestSubCategoryID(i));
             for(uint256 j=0; j < activeID.length;) {
                 UserInsuranceInfo storage userActiveInsuranceInfo = usersInsuranceInfo[userAddress][i][activeID[j]];
-                uint256 duration = block.timestamp > userActiveInsuranceInfo.startTime ? block.timestamp - userActiveInsuranceInfo.startTime : 0;
+                uint256 duration = (
+                    (block.timestamp > userActiveInsuranceInfo.startTime) ? (
+                        (block.timestamp > userActiveInsuranceInfo.validTill) ? 
+                        userActiveInsuranceInfo.validTill : (block.timestamp - userActiveInsuranceInfo.startTime)
+                    ) : 0);
                 balanceToBePaid += (userActiveInsuranceInfo.insuranceFlowRate * duration);
                 ++j;
             }
@@ -395,7 +424,11 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 balanceToBePaid = 0;
         for(uint256 i=0; i< activeID.length;){
             UserInsuranceInfo storage userActiveInsuranceInfo = usersInsuranceInfo[userAddress][categoryID][activeID[i]];
-            uint256 duration = (userActiveInsuranceInfo.validTill - userActiveInsuranceInfo.startTime);
+            uint256 duration = (
+                (block.timestamp > userActiveInsuranceInfo.startTime) ? (
+                    (block.timestamp > userActiveInsuranceInfo.validTill) ? 
+                    userActiveInsuranceInfo.validTill : (block.timestamp - userActiveInsuranceInfo.startTime)
+                ) : 0);
             balanceToBePaid += (userActiveInsuranceInfo.insuranceFlowRate * duration);
             ++i;
         }
@@ -411,7 +444,11 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256[] memory activeID = findActivePremiumCost(userAddress, categoryID, _insuranceRegistry.getLatestSubCategoryID(categoryID));
         for(uint256 i=0; i< activeID.length;){
             UserInsuranceInfo storage userActiveInsuranceInfo = usersInsuranceInfo[userAddress][categoryID][activeID[i]];
-            uint256 duration = (userActiveInsuranceInfo.validTill - userActiveInsuranceInfo.startTime);
+            uint256 duration = (
+                (block.timestamp > userActiveInsuranceInfo.startTime) ? (
+                    (block.timestamp > userActiveInsuranceInfo.validTill) ? 
+                    userActiveInsuranceInfo.validTill : (block.timestamp - userActiveInsuranceInfo.startTime)
+                ) : 0);
             balanceToBePaid += (userActiveInsuranceInfo.insuranceFlowRate * duration);
             ++i;
         }

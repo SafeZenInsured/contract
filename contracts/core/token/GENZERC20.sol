@@ -18,11 +18,21 @@ contract GENZ is ERC20Upgradeable, ERC20PermitUpgradeable, BaseUpgradeablePausab
     100M fixed supply GENZ tokens will be minted to the Buy Contract. 
 
     */
-    function initialize(address buyContract) external initializer {
+    uint256 private _initVersion;
+    
+    function initialize() external initializer {
         __ERC20_init("GenZ Labs", "GENZ");
         __ERC20Permit_init("GENZ");
         __BaseUpgradeablePausable_init(_msgSender());
-        _mint(buyContract, 1e26);
+    }
+
+    error GENZ__ImmutableChangesError();
+    function init(address buyContract) external onlyAdmin {
+         if (_initVersion > 0) {
+            revert GENZ__ImmutableChangesError();
+        }
+        ++_initVersion;
+        _mint(buyContract, 1e25);
     }
 
     function pause() external onlyAdmin {

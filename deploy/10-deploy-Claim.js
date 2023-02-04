@@ -1,6 +1,9 @@
 module.exports = async ({ deployments, getChainId }) => {
     const { save } = deployments
     
+    const DAI_CONTRACT = await ethers.getContract("MockDAI");
+    const DAI_ADDRESS = DAI_CONTRACT.address
+
     const GSZT_CONTRACT = await ethers.getContract("GSZT")
     const GSZT_ADDRESS = GSZT_CONTRACT.address
 
@@ -11,7 +14,10 @@ module.exports = async ({ deployments, getChainId }) => {
     const CLAIM_GOVERNANCE_REGISTRY = await upgrades.deployProxy(
         CLAIM_GOVERNANCE_CONTRACT, 
         [GSZT_ADDRESS, GLOBAL_PAUSE_ADDRESS], 
-        {}
+        {
+            constructorArgs: [DAI_ADDRESS], 
+            unsafeAllow: ['constructor', 'state-variable-immutable'],
+        }
     );
     await CLAIM_GOVERNANCE_REGISTRY.deployed();
     console.log("Claim Contract Proxy deployed at:", CLAIM_GOVERNANCE_REGISTRY.address);

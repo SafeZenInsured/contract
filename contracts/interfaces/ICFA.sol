@@ -20,13 +20,19 @@ interface ICFA {
     function addInsuranceAmount(
         uint256 insuredAmount, 
         uint256 categoryID, 
-        uint256 subCategoryID
+        uint256 subCategoryID,
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s
     ) external returns(bool);
 
     function minusInsuranceAmount(
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID,
+        uint8 v, 
+        bytes32 r, 
+        bytes32 s,
         bool closeStream
     ) external returns(bool);
 
