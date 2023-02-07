@@ -29,6 +29,12 @@ GENZ Token Utilities:
     - In the later stages, when we'll integrate more chains, then GENZ tokens will be burned /
       accordingly to ensure capped 100M GENZ token supply. 
 
+
+Other than that, out of the funds received, every month, projects will be scrutinized, and,
+will be offered some amount in the form of monthly grants. Investors will get all the updates,
+to which projects the grant has been offered, resulting in getting them a chance to be an early
+investors for such projects.
+
 */
 
 // Importing interfaces

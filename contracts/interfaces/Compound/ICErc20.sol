@@ -16,4 +16,6 @@ interface ICErc20 {
     function redeemUnderlying(uint) external returns (uint256);
     
     function balanceOf(address account) external returns (uint256);
+
+    function underlying() external returns(address);
 }

@@ -13,7 +13,6 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeab
 // Importing interfaces
 import "./../../interfaces/IClaim.sol";
 import "./../../interfaces/IGlobalPauseOperation.sol";
-import "@openzeppelin/contracts-upgradeable/interfaces/IERC20Upgradeable.sol";
 
 
 /// Report any bug or issues at:
@@ -37,8 +36,8 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
 
     /// _tokenGSZT: SafeZen Governance contract
     /// _globalPauseOperation: Pause Operation contract
-    IERC20Upgradeable private _tokenDAI;
-    IERC20PermitUpgradeable private _tokenPermitDAI;
+    IERC20Upgradeable private immutable _tokenDAI;
+    IERC20PermitUpgradeable private immutable _tokenPermitDAI;
     IERC20Upgradeable private _tokenGSZT;
     IGlobalPauseOperation private _globalPauseOperation;
 
@@ -106,7 +105,7 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
         address safezenGovernanceTokenAddress,
         address globalPauseOperationAddress
     ) external initializer {
-        _stakedAmount = 10e18;
+        _stakedAmount = 10 * 1e18;
         _tokenGSZT = IERC20Upgradeable(safezenGovernanceTokenAddress);
         _globalPauseOperation = IGlobalPauseOperation(globalPauseOperationAddress);
         __BaseUpgradeablePausable_init(_msgSender());
@@ -143,7 +142,7 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
         string memory proof, 
         uint256 requestedClaimAmount,
         uint256 deadline, 
-        uint8 v, 
+        uint8 v,
         bytes32 r, 
         bytes32 s
     ) public override returns(bool) {
@@ -165,12 +164,11 @@ contract ClaimGovernance is IClaim, BaseUpgradeablePausable {
             revert Claim__PausedOperationFailedError();
         }
         _tokenPermitDAI.safePermit(_msgSender(), address(this), _stakedAmount, deadline, v, r, s);
-        _tokenDAI.safeTransfer(address(this), _stakedAmount);
+        _tokenDAI.safeTransferFrom(_msgSender(), address(this), _stakedAmount);
         emit NewClaimCreated(_msgSender(), claimID, proof);
         return true;
     }
-     
-    
+
     function vote(
         uint256 _claimID, 
         bool support

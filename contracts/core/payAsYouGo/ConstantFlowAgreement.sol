@@ -33,11 +33,11 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
     /// _tokenDAI: DAI ERC20 token
-    /// _sztDAI: sztDAI ERC20 token
+    /// _SZTDAI: sztDAI ERC20 token
     /// _insuranceRegistry: Insurance Registry Contract
+    IERC20Extended private _SZTDAI;
     IERC20Upgradeable private _tokenDAI;
-    IERC20PermitUpgradeable private _tokenPermitDAI;
-    IERC20Extended private _sztDAI;
+    IERC20PermitUpgradeable private _tokenPermitSZTDAI;
     IInsuranceRegistry private _insuranceRegistry;
 
     /// @dev collects user information for particular insurance
@@ -98,8 +98,8 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         _startWaitingTime = startWaitingTime * 1 minutes; 
         _minimumInsurancePeriod = minimumInsurancePeriod * 1 minutes;
         _tokenDAI = IERC20Upgradeable(tokenDAIaddress);
-        _tokenPermitDAI = IERC20PermitUpgradeable(tokenDAIaddress);
-        _sztDAI = IERC20Extended(sztDAIAddress);
+        _SZTDAI = IERC20Extended(sztDAIAddress);
+        _tokenPermitSZTDAI = IERC20PermitUpgradeable(tokenDAIaddress);
         _insuranceRegistry = IInsuranceRegistry(insuranceRegistryCA);
         __BaseUpgradeablePausable_init(_msgSender());
         return true;
@@ -143,11 +143,16 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID, 
+        uint256 deadline,
         uint8 v, 
         bytes32 r, 
         bytes32 s
     ) external override nonReentrant returns(bool) {
-        bool success = _addInsuranceAmount(insuredAmount, categoryID, subCategoryID, v, r, s);
+        uint256 minDeadlinePeriod = block.timestamp + _maxInsuredDays + 30 days; 
+        if(deadline < minDeadlinePeriod) {
+            revert CFA__TransactionFailedError();
+        }
+        bool success = _addInsuranceAmount(insuredAmount, categoryID, subCategoryID, deadline, v, r, s);
         return success;
     }
     
@@ -156,6 +161,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID,
+        uint256 deadline,
         uint8 v, 
         bytes32 r, 
         bytes32 s
@@ -167,12 +173,12 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
                 revert CFA__TransactionFailedError();
             }
         }   
-        uint256 deadline = block.timestamp + _maxInsuredDays + 30 days;  
+         
         (bool activateSuccess, uint256 insuranceCost) = activateInsurance(newInsuredAmount, categoryID, subCategoryID);
         if (!activateSuccess) {
             revert CFA__TransactionFailedError();
         }
-        _tokenPermitDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, v, r, s);  
+        _tokenPermitSZTDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, v, r, s);  
         return true;
     }
 
@@ -186,12 +192,17 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID,
+        uint256 deadline,
         uint8 v, 
         bytes32 r, 
         bytes32 s,
         bool closeStream
     ) external override nonReentrant returns(bool) {
-        bool success = _minusInsuranceAmount(insuredAmount, categoryID, subCategoryID, v, r, s, closeStream);
+        uint256 minDeadlinePeriod = block.timestamp + _maxInsuredDays + 30 days; 
+        if(deadline < minDeadlinePeriod) {
+            revert CFA__TransactionFailedError();
+        }
+        bool success = _minusInsuranceAmount(insuredAmount, categoryID, subCategoryID, deadline, v, r, s, closeStream);
         return success;
     }
     
@@ -200,6 +211,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID,
+        uint256 deadline,
         uint8 v, 
         bytes32 r, 
         bytes32 s,
@@ -214,12 +226,11 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         }
         if (!closeStream) {
             uint256 newInsuredAmount = usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].insuredAmount - insuredAmount;
-            uint256 deadline = block.timestamp + _maxInsuredDays + 30 days;
             (bool activateSuccess, uint256 insuranceCost) = activateInsurance(newInsuredAmount, categoryID, subCategoryID);
             if (!activateSuccess) {
                 revert CFA__TransactionFailedError();
             }
-            _tokenPermitDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, v, r, s);  
+            _tokenPermitSZTDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, v, r, s);  
 
         }
         return true;
@@ -272,7 +283,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         UserInsuranceInfo storage userInsuranceInfo = usersInsuranceInfo[_msgSender()][categoryID][subCategoryID];
         UserGlobalInsuranceInfo storage userGlobalInsuranceInfo = usersGlobalInsuranceInfo[_msgSender()];
         
-        uint256 userEstimatedBalance = _sztDAI.balanceOf(_msgSender()) - userGlobalInsuranceInfo.globalInsuranceCost;
+        uint256 userEstimatedBalance = _SZTDAI.balanceOf(_msgSender()) - userGlobalInsuranceInfo.globalInsuranceCost;
         uint256 incomingAmountPerSec = (
             _insuranceRegistry.getStreamFlowRate(categoryID, subCategoryID) * insuredAmount) / 1e18;
         uint256 globalIncomingAmountPerSec = userGlobalInsuranceInfo.insuranceStreamRate + incomingAmountPerSec;
@@ -303,6 +314,28 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         return (success, userInsuranceInfo.insuranceCost);
     }
 
+    function getExpectedInsuranceCostAndDeadline(
+        uint256 insuredAmount,
+        uint256 categoryID,
+        uint256 subCategoryID
+    ) external view returns(uint256, uint256) {
+        UserGlobalInsuranceInfo memory userGlobalInsuranceInfo = usersGlobalInsuranceInfo[_msgSender()];
+        
+        uint256 userEstimatedBalance = _SZTDAI.balanceOf(_msgSender()) - userGlobalInsuranceInfo.globalInsuranceCost;
+        uint256 incomingAmountPerSec = (
+            _insuranceRegistry.getStreamFlowRate(categoryID, subCategoryID) * insuredAmount) / 1e18;
+        
+        uint256 expectedValidTill = (userEstimatedBalance / incomingAmountPerSec);
+        uint256 validTill =  (
+            expectedValidTill < _maxInsuredDays ? 
+            (block.timestamp + _startWaitingTime) + expectedValidTill : 
+            (block.timestamp + _startWaitingTime) + _maxInsuredDays
+        );
+        uint256 insuranceCost = validTill * incomingAmountPerSec;
+        uint256 deadline = block.timestamp + _maxInsuredDays + 30 days;
+        return (insuranceCost, deadline);
+    }
+
     /// NOTE: few if and else to consider for globalinsuranceinfo like endtime and start time 
     function deactivateInsurance(
         address userAddress, 
@@ -328,7 +361,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 flowRate = userInsuranceInfo.insuranceFlowRate;
         uint256 insuredAmount = userInsuranceInfo.insuredAmount;
         bool success = _insuranceRegistry.removeCoverageOffered(categoryID, subCategoryID, insuredAmount, flowRate);
-        bool burnSuccess = _sztDAI.burnFrom(userAddress, amountToBeBurned);
+        bool burnSuccess = _SZTDAI.burnFrom(userAddress, amountToBeBurned);
         if ((!success) || (!burnSuccess)) {
             revert CFA__TransactionFailedError();
         }
@@ -354,10 +387,10 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
             }
             ++i;
         }
-        uint256 userBalance = _sztDAI.balanceOf(userAddress); 
+        uint256 userBalance = _SZTDAI.balanceOf(userAddress); 
         uint256 amountToBeBurned = expectedAmountToBePaid > userBalance ? userBalance : expectedAmountToBePaid;
         usersGlobalInsuranceInfo[userAddress].insuranceStreamRate = 0;
-        bool success = _sztDAI.burnFrom(userAddress, amountToBeBurned);
+        bool success = _SZTDAI.burnFrom(userAddress, amountToBeBurned);
         if (!success) {
             revert CFA__TransactionFailedError();
         }
