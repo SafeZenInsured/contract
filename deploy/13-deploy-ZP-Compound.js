@@ -1,3 +1,5 @@
+const XVS_TESTNET = "0xB9e0E753630434d7863528cc73CB7AC638a7c8ff"
+
 module.exports = async ({ deployments, getChainId }) => {
     const { save } = deployments
 
@@ -5,7 +7,7 @@ module.exports = async ({ deployments, getChainId }) => {
     const GLOBAL_PAUSE_ADDRESS = GLOBAL_PAUSE_CONTRACT.address;
     
     const ZP_COMPOUND_CONTRACT = await ethers.getContractFactory("CompoundV2Insurance");
-    const ZP_COMPOUND = await upgrades.deployProxy(ZP_COMPOUND_CONTRACT, [GLOBAL_PAUSE_ADDRESS], {
+    const ZP_COMPOUND = await upgrades.deployProxy(ZP_COMPOUND_CONTRACT, [GLOBAL_PAUSE_ADDRESS, XVS_TESTNET], {
         constructorArgs: [], 
     });
     await ZP_COMPOUND.deployed();

@@ -5,17 +5,17 @@ interface ISwapDAI {
 
     function swapDAI(
         uint256 _amount,
-        uint deadline, 
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
+        uint256 deadline, 
+        uint8 permitV,
+        bytes32 permitR,
+        bytes32 permitS
     ) external returns(bool);
 
-    function swapsztDAI(
+    function swapSZTDAI(
         uint256 _amount,
-        uint deadline, 
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
+        uint256 deadline, 
+        uint8 permitV,
+        bytes32 permitR,
+        bytes32 permitS
     ) external returns(bool);
 }

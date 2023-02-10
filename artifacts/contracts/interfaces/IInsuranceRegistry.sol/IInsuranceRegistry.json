@@ -115,11 +115,6 @@
       "inputs": [
         {
           "internalType": "uint256",
-          "name": "stakedTokenID",
-          "type": "uint256"
-        },
-        {
-          "internalType": "uint256",
           "name": "categoryID",
           "type": "uint256"
         },

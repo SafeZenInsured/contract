@@ -38,7 +38,6 @@ interface IInsuranceRegistry {
     ) external returns(bool);
 
     function claimAdded(
-        uint256 stakedTokenID, 
         uint256 categoryID, 
         uint256 subCategoryID_
     ) external returns(bool);

@@ -21,7 +21,7 @@ import "./../../BaseUpgradeablePausable.sol";
 contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
     /// _initVersion: counter to initialize the init one-time function, max value can be 1.
     /// _tokenCounter: SZT ERC20 tokens in circulation
-    /// _commonRatio: ratio for SZT ERC20 YUVAA calculation
+    /// _commonRatio: ratio for SZT ERC20 YUVAA token price calculation
     /// SZT_BASE_PRICE: SZT ERC20 token base price
     /// SZT_BASE_PRICE_WITH_DEC: SZT ERC20 token base price with decimals
     uint256 private _initVersion;
@@ -49,7 +49,7 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
     ICoveragePool private _coveragePool;
     IGlobalPauseOperation private _globalPauseOperation;
     
-    /// @dev immutable commonRatio, initializing _tokenDAI and _tokenDAIPermit interfaces
+    /// @notice immutable commonRatio, initializing _tokenDAI and _tokenDAIPermit interfaces
     /// @param value: value of the common Ratio
     /// @param decimals: decimals against the value of the commmon ratio
     /// @param tokenDAI: address of the DAI token
@@ -60,13 +60,13 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         _commonRatio = (value * 10e17) / (10 ** decimals); // Immutable
     }
 
-    /// @dev function access restricted to the coverage pool contract address
+    /// @notice function access restricted to the coverage pool contract address calls only
     modifier isPermitted() {
         require(_msgSender() == address(_coveragePool));
         _;
     }
 
-    /// @dev this modifier checks if the contract function call has to be paused temporarily
+    /// @notice this modifier checks if the contracts' certain function calls has to be paused temporarily
     modifier ifNotPaused() {
         require(
             (paused() != true) && 
@@ -74,12 +74,12 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         _;
     }
 
-    /// @dev initialize function, called during the contract initialization
+    /// @notice initialize function, called during the contract initialization
     function initialize() external initializer {
         __BaseUpgradeablePausable_init(_msgSender());
     }
 
-    /// @dev one time function to initialize the contract
+    /// @notice one time function to initialize the contract
     /// @param safeZenTokenAddress: address of the SZT token
     /// @param coveragePoolAddress: address of the coverage pool contract
     /// @param safezenGovernanceTokenCA: address of the GSZT token
@@ -101,17 +101,18 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         _globalPauseOperation = IGlobalPauseOperation(pauseOperationAddress);
     }
 
-    /// @dev to pause the certain functions within the contract
+    /// @notice to pause the certain functions within the contract
     function pause() external onlyAdmin {
         _pause();
     }
 
-    /// @dev to unpause the certain functions paused earlier within the contract
+    /// @notice to unpause the certain functions paused earlier within the contract
     function unpause() external onlyAdmin {
         _unpause();
     }
 
-    /// @dev buying our native non-speculative SZT token
+    /// @notice buying our native non-speculative SZT token
+    /// @param userAddress: user wallet address
     /// @param amountInSZT: amount of SZT tokens user wishes to purchase
     function buySZTToken(
         address userAddress,
@@ -131,22 +132,28 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
     }
     
     /// NOTE: approve SZT and GSZT amount to BuySellContract before calling this function
-    /// @dev selling the SZT tokens
+    /// @notice selling the SZT tokens
     /// @param value: the amounnt of SZT tokens user wishes to sell
+    /// @param deadline: GSZT ERC20 token permit deadline
+    /// @param permitV: GSZT ERC20 token permit signature (value v)
+    /// @param permitR: GSZT ERC20 token permit signature (value r)
+    /// @param permitS: GSZT ERC20 token permit signature (value s)
     function sellSZTToken(
         address userAddress,
         uint256 value,
         uint256 deadline, 
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
+        uint8 permitV,
+        bytes32 permitR,
+        bytes32 permitS
     ) external ifNotPaused nonReentrant returns(bool) {
         uint256 tokenCount = getTokenCounter();
         (/*amountPerToken*/, uint256 amountToBeReleased) = calculatePriceSZT(
             (tokenCount - value), tokenCount
         );
         _tokenCounter -= value;
-        _tokenPermitGSZT.safePermit(userAddress, address(this), value, deadline, v, r, s);
+        _tokenPermitGSZT.safePermit(
+            userAddress, address(this), value, deadline, permitV, permitR, permitS
+        );
         bool burnSuccessGSZT = _tokenGSZT.burnFrom(
             userAddress, _burnTokenGSZT(_msgSender())
         );
@@ -158,8 +165,9 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         return true;
     }
 
-    /// @dev minting the GSZT tokens to the provided user address
-    /// @param userAddress: user address
+    /// @notice minting the GSZT tokens to the provided user address
+    /// @param userAddress: user wallet address
+    /// @param userBalanceSZT: user SZT ERC20 token balance
     function _mintGSZT(
         address userAddress,
         uint256 userBalanceSZT
@@ -177,16 +185,22 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         return true;
     }
 
-    /// @dev check the current SZT token price
+
+    // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::: //
+    // ::::::::::::::::::::::::: VIEW FUNCTIONS ::::::::::::::::::::::::: //
+    // :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::: //
+
+
+    /// @notice check the current SZT token price
     function viewSZTCurrentPrice() external view override returns(uint256) {
         uint256 SZTCommonRatio = (_commonRatio * SZT_BASE_PRICE * _tokenCounter)/1e18;
         uint256 amountPerToken = (SZT_BASE_PRICE * (1e18)) + SZTCommonRatio;
         return amountPerToken;
     }
     
-    /// @dev calculate the SZT token value for the asked amount of SZT tokens
+    /// @notice calculate the SZT token value for the asked amount of SZT tokens
     /// @param issuedSZTTokens: the amount of SZT tokens currently in circulation
-    /// @param requiredTokens: issuedSZTTokens + the amount of SZT tokens required
+    /// @param requiredTokens: issuedSZTTokens + amount of GENZ ERC20 user wishes to purchase
     function calculatePriceSZT(
         uint256 issuedSZTTokens, 
         uint256 requiredTokens
@@ -201,7 +215,7 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         return (amountPerToken, amountToBePaid);
     }
 
-    /// @dev calculate the common ratio for the GSZT token calculation
+    /// @notice calculate the common ratio for the GSZT token calculation
     /// @param issuedSZTTokens: amount of SZT tokens currently in circulation
     /// @param alpha: alpha value for the calculation of GSZT token
     /// @param decimals: to calculate the actual alpha value for GSZT tokens 
@@ -216,7 +230,7 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         return amountPerToken;
     }
 
-    /// @dev Burning the GSZT token
+    /// @notice Burning the GSZT token
     /// @param userAddress: wallet address of the user
     function _burnTokenGSZT(address userAddress) private view returns(uint256) {
         uint256 userBalanceSZT = _tokenSZT.balanceOf(userAddress);
@@ -227,7 +241,7 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         return amountToBeBurned;
     }
 
-    /// @dev calculating the GSZT token to be awarded to user based on the amount of SZT token user have
+    /// @notice calculating the GSZT token to be awarded to user based on the amount of SZT token user have
     /// @param issuedSZTTokens: amount of issued SZT tokens to user    
     function _calculateTokenCountGSZT(
         uint256 issuedSZTTokens
@@ -244,17 +258,17 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
         return GSZTTokenCount;
     }
 
-    /// @dev to check the common ratio used in the price calculation of SZT token 
+    /// @notice to check the common ratio used in the price calculation of SZT token 
     function getCommonRatio() external view returns (uint256) {
         return _commonRatio;
     }
 
-    // @dev returns the current token counter
+    // @notice returns the current token counter
     function getTokenCounter() public view returns(uint256) {
         return _tokenCounter;
     }
 
-    // @dev returns the SZT base price with 18 decimals
+    // @notice returns the SZT base price with 18 decimals
     function getBasePriceSZT() public pure returns(uint256) {
         return SZT_BASE_PRICE_WITH_DEC;
     }

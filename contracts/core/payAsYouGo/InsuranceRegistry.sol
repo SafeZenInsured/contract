@@ -8,6 +8,7 @@ pragma solidity 0.8.16;
 import "./../../interfaces/IBuySellSZT.sol";
 import "./../../interfaces/ICoveragePool.sol";
 import "./../../interfaces/IInsuranceRegistry.sol";
+import "./../../interfaces/IClaimGovernance.sol";
 import "@openzeppelin/contracts/interfaces/IERC20.sol";
 
 /// Importing required contracts
@@ -17,34 +18,32 @@ import "./../../BaseUpgradeablePausable.sol";
 /// @custom:security-contact anshik@safezen.finance
 contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     /// _initVersion: counter to initialize the init one-time function, max value can be 1.
-    /// _categoryID: 
-    /// claimStakedValueDAI:
-    /// claimStakedValueSZT: 
-    /// _addressCFA:
+    /// _categoryID: insurance category, e.g., stablecoin depeg insurance.
+    /// PLATFORM_COST: platform fee on the profit earned
+    /// _addressCFA:address of the Constant Flow Agreement contract interface
     uint256 private _initVersion;
     uint256 private _categoryID;
-    uint256 private claimStakedValueDAI;
-    uint256 private claimStakedValueSZT;
-    uint256 private constant PLATFORM_COST = 993; /// 0.7% platform fee = 993/1000
+    uint256 private constant PLATFORM_COST = 90;
     address private _addressCFA;
 
     
-    /// _tokenDAI: DAI ERC20 token
-    /// _tokenSZT: SZT ERC20 token
-    /// _buySellSZT:Buy Sell SZT contract
-    /// _coveragePool: Coverage Pool contract
+    /// _tokenDAI: DAI ERC20 token interface
+    /// _tokenSZT: SZT ERC20 token interface
+    /// _buySellSZT:Buy Sell SZT contract interface
+    /// _coveragePool: Coverage Pool contract interface
     IERC20 private _tokenDAI;
     IERC20 private _tokenSZT;
     IBuySellSZT private _buySellSZT;
     ICoveragePool private _coveragePool;
+    IClaimGovernance private _claimGovernance;
 
     /// @dev collects info about the insurance subcategories, e.g., USDC depeg coverage, DAI depeg coverage.
-    /// @param isActive: checks whether insurance given subcategory is active or not.
-    /// @param subCategoryName: insurance subcategory title
-    /// @param info: insurance subcategory info, e.g., algorithmic stablecoin, etc.
-    /// @param liquidity: insurance maximum coverage amount that can be offered
-    /// @param streamFlowRate: insurance premium rate per second
-    /// @param coverageOffered: insurance coverage amount already offered
+    /// isActive: checks whether insurance given subcategory is active or not.
+    /// subCategoryName: insurance subcategory title
+    /// info: insurance subcategory info, e.g., algorithmic stablecoin, etc.
+    /// liquidity: insurance maximum coverage amount that can be offered
+    /// streamFlowRate: insurance premium rate per second
+    /// coverageOffered: insurance coverage amount already offered
     struct SubCategoryInfo {
         bool isActive;
         string subCategoryName;
@@ -56,9 +55,13 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 coverageOffered;
     }
 
-    /// for Non Community Governed Sub Categories, the riskPoolCategory will start from 10000,
-    /// that value will be unique to that pool.
-    struct VersionableRiskPoolInfo {
+    /// @notice collects specific epochs info
+    /// startTime: start time of the specific epoch
+    /// endTime: end time of the specific epoch
+    /// riskPoolLiquidity: risk pool liquidity during the specific epoch
+    /// riskPoolStreamRate: risk pool stream rate during the specific epoch
+    /// liquidation: liquidation, if happened, in the specific epoch
+    struct RiskPoolEpochInfo {
         uint256 startTime; // at the start
         uint256 endTime;  // at the end
         uint256 riskPoolLiquidity; // at the start
@@ -66,28 +69,36 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 liquidation; // if needed
     }
 
-    /// categoryID => version
-    mapping(uint256 => uint256) public version;
+    /// Maps :: categoryID(uint256) => epoch(uint256)
+    mapping(uint256 => uint256) public epoch;
 
-    // categoryID => subCategoryID
+    /// Maps :: categoryID(uint256) => subCategoryID(uint256)
     mapping(uint256 => uint256) public subCategoryID;
 
-    /// CategoryID => SubCategoryID => SubCategoryInfo
+    /// Maps :: categoryID(uint256) => subCategoryID(uint256) => SubCategoryInfo(struct)
     mapping (uint256 => mapping(uint256 => SubCategoryInfo)) public subCategoriesInfo;
 
-    /// CategoryID => SubCategoryID => version => riskPoolCategory
-    /// if less than 10000, then community governed
-    /// if equal or greater than 10000, then non-community governed
-    mapping (uint256 => mapping(uint256 => mapping(uint256 => uint256))) public versionRiskPoolCategory;
+    /// Maps :: categoryID(uint256) => subCategoryID(uint256) => epoch(uint256) => riskPoolCategory(uint256)
+    /// If value is less than 10000, then risk-pool is community governed, whereas,
+    /// if value is equal or greater than 10000, then non-community governed risk-pool.
+    mapping (uint256 => mapping(uint256 => mapping(uint256 => uint256))) public epochRiskPoolCategory;
 
-    /// CategoryID => riskPoolCategory => version => VersionableRiskPoolInfo
-    mapping(uint256 => mapping(uint256 => mapping(uint256 => VersionableRiskPoolInfo))) public versionableRiskPoolsInfo;
+    /// Maps :: categoryID(uint256) => riskPoolCategory(uint256) => epoch(uint256) => RiskPoolEpochInfo(struct)
+    mapping(uint256 => mapping(uint256 => mapping(uint256 => RiskPoolEpochInfo))) public versionableRiskPoolsInfo;
 
+    /// @notice function access restricted to the Constant Flow Agreement contract address calls only
     modifier onlyCFA() {
         require(_msgSender() == _addressCFA);
         _;
     }
 
+    /// @notice function access restricted to the Claim Governance contract address calls only
+    modifier onlyClaimGovernance() {
+        require(_msgSender() == address(_claimGovernance));
+        _;
+    }
+
+    /// @notice function access restricted to the Coverage Pool contract address calls only
     modifier onlyCoveragePool() {
         require(_msgSender() == address(_coveragePool));
         _;
@@ -98,8 +109,6 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         address tokenAddressDAI,
         address tokenAddressSZT
     ) external initializer {
-        claimStakedValueSZT = 1e17;
-        claimStakedValueDAI = 10e18;
         _buySellSZT = IBuySellSZT(buySellSZTCA);
         _tokenDAI = IERC20(tokenAddressDAI);
         _tokenSZT = IERC20(tokenAddressSZT);
@@ -108,7 +117,8 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
 
     function init(
         address CFA,
-        address coveragePoolAddress
+        address coveragePoolAddress,
+        address addressClaimGovernance
     ) external onlyAdmin {
         if (_initVersion > 0) {
             revert InsuranceRegistry__ImmutableChangesError();
@@ -116,6 +126,7 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         ++_initVersion;
         _addressCFA = CFA;
         _coveragePool = ICoveragePool(coveragePoolAddress);
+        _claimGovernance = IClaimGovernance(addressClaimGovernance);
     }
 
     function pause() external onlyAdmin {
@@ -149,8 +160,8 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         subCategoryInfo.subCategoryID = subCategoryID[categoryID];
         subCategoryInfo.coverageOffered = 0;
         subCategoryInfo.streamFlowRate = streamFlowRate;
-        uint256 versionID = version[categoryID];
-        versionRiskPoolCategory[categoryID][subCategoryID_][versionID] = riskPoolCategory;
+        uint256 versionID = epoch[categoryID];
+        epochRiskPoolCategory[categoryID][subCategoryID_][versionID] = riskPoolCategory;
     }
 
     function updateProtocolRiskPoolCategory(
@@ -169,19 +180,19 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 coverageAmount
     ) external onlyAdmin {
         (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID, subCategoryID_);
-        ++version[categoryID];
-        uint256 newVersionID = version[categoryID];
-        VersionableRiskPoolInfo storage newRiskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][newVersionID];
+        ++epoch[categoryID];
+        uint256 newVersionID = epoch[categoryID];
+        RiskPoolEpochInfo storage newRiskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][newVersionID];
         newRiskPool.startTime = block.timestamp;
         newRiskPool.liquidation = 100 - liquidatedPercent;
         newRiskPool.riskPoolLiquidity = ((previousLiquiditySupplied * (100 - liquidatedPercent)) / 100);
         newRiskPool.riskPoolStreamRate = previousIncomingFlowRate;
         for(uint i = 1; i <= subCategoryID[categoryID];) {
             if (
-                (versionRiskPoolCategory[categoryID][i][newVersionID - 1] == riskPoolCategory) &&
+                (epochRiskPoolCategory[categoryID][i][newVersionID - 1] == riskPoolCategory) &&
                 (subCategoriesInfo[categoryID][i].isActive)
             ) {
-                versionRiskPoolCategory[categoryID][i][newVersionID] = riskPoolCategory;
+                epochRiskPoolCategory[categoryID][i][newVersionID] = riskPoolCategory;
                 subCategoriesInfo[categoryID][i].liquidity = ((subCategoriesInfo[categoryID][i].liquidity * (100 - liquidatedPercent)) / 100);
             }
             ++i;
@@ -195,16 +206,6 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 newFlowRate
     ) external onlyAdmin {
         subCategoriesInfo[categoryID][subCategoryID_].streamFlowRate = newFlowRate;
-    }
-
-    function updateClaimStakedValue(uint256 token, uint256 value) external onlyAdmin {
-        if (token == 0) {
-            claimStakedValueDAI = value;
-        }
-        else {
-            claimStakedValueSZT = value;
-        }
-        emit UpdatedClaimStakedValue();
     }
 
     // coverage provided
@@ -263,21 +264,11 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     }
 
     function claimAdded(
-        uint256 stakedTokenID, 
         uint256 categoryID, 
         uint256 subCategoryID_
-    ) external returns(bool) {
+    ) external override onlyClaimGovernance returns(bool) {
         (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID, subCategoryID_);
         _afterUpdateVersionInformation(categoryID, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, previousLiquiditySupplied);
-        bool success;
-        if (stakedTokenID == 0) {
-            success = _tokenDAI.transferFrom(_msgSender(), address(this), claimStakedValueDAI);
-        } else {
-            success = _tokenSZT.transferFrom(_msgSender(), address(this), claimStakedValueSZT);
-        }
-        if (!success) {
-            revert InsuranceRegistry__TransactionFailedError();
-        }
         return true;
     }
     
@@ -290,9 +281,9 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 startVersionID = activeVersionID[0];
         uint256 premiumEarnedFlowRate = 0;
         uint256 userPremiumEarned = 0;
-        uint256 riskPoolCategory = versionRiskPoolCategory[categoryID][subCategoryID_][startVersionID];
+        uint256 riskPoolCategory = epochRiskPoolCategory[categoryID][subCategoryID_][startVersionID];
         uint256 counter = 0;
-        for(uint256 i = startVersionID; i <= version[subCategoryID_];) {
+        for(uint256 i = startVersionID; i <= epoch[subCategoryID_];) {
             if(activeVersionID[counter] == i) {
                 if (_coveragePool.getUnderWriterDepositedBalance(categoryID, subCategoryID_, i) > 0) {
                     userBalance += _coveragePool.getUnderWriterDepositedBalance(categoryID, subCategoryID_, i);
@@ -302,12 +293,12 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
                 }
                 ++counter;
             }
-            riskPoolCategory = versionRiskPoolCategory[categoryID][subCategoryID_][i];
-            VersionableRiskPoolInfo storage riskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][i];
+            riskPoolCategory = epochRiskPoolCategory[categoryID][subCategoryID_][i];
+            RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][i];
             userBalance = (userBalance * riskPool.liquidation) / 100;
             premiumEarnedFlowRate = riskPool.riskPoolStreamRate;            
             uint256 duration = riskPool.endTime - riskPool.startTime;
-            userPremiumEarned += ((duration * userBalance * premiumEarnedFlowRate * PLATFORM_COST)/ (1000 * riskPool.riskPoolLiquidity));
+            userPremiumEarned += ((duration * userBalance * premiumEarnedFlowRate * PLATFORM_COST)/ (100 * riskPool.riskPoolLiquidity));
             ++i;
         }
         userBalance += userPremiumEarned;
@@ -318,9 +309,9 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 categoryID, 
         uint256 subCategoryID_
     ) internal returns(uint256, uint256, uint256) {
-        uint256 versionID = version[categoryID];
-        uint256 riskPoolCategory = versionRiskPoolCategory[categoryID][subCategoryID_][versionID];
-        VersionableRiskPoolInfo storage riskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][versionID];
+        uint256 versionID = epoch[categoryID];
+        uint256 riskPoolCategory = epochRiskPoolCategory[categoryID][subCategoryID_][versionID];
+        RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][versionID];
         riskPool.endTime = block.timestamp;
         uint256 previousIncomingFlowRate = riskPool.riskPoolStreamRate;
         uint256 previousLiquiditySupplied = riskPool.riskPoolLiquidity;
@@ -334,17 +325,17 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 previousIncomingFlowRate, 
         uint256 previousLiquiditySupplied
     ) internal {
-        ++version[categoryID];
-        uint256 versionID = version[categoryID];
-        VersionableRiskPoolInfo storage riskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][versionID];
+        ++epoch[categoryID];
+        uint256 versionID = epoch[categoryID];
+        RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][versionID];
         riskPool.startTime = block.timestamp;
         riskPool.riskPoolLiquidity = previousLiquiditySupplied;
         riskPool.riskPoolStreamRate = previousIncomingFlowRate;
-        versionRiskPoolCategory[categoryID][subCategoryID_][versionID] = riskPoolCategory;
+        epochRiskPoolCategory[categoryID][subCategoryID_][versionID] = riskPoolCategory;
     }
 
     function getVersionID(uint256 categoryID) external view returns(uint256) {
-        return version[categoryID];
+        return epoch[categoryID];
     }   
 
     function getInsuranceInfo(
@@ -363,7 +354,7 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     }
 
     function getProtocolRiskCategory(uint256 categoryID, uint256 subCategoryID_, uint256 version_) external view returns (uint256) {
-        return versionRiskPoolCategory[categoryID][subCategoryID_][version_];
+        return epochRiskPoolCategory[categoryID][subCategoryID_][version_];
     }
 
     function getStreamFlowRate(uint256 categoryID, uint256 subCategoryID_) external view returns(uint256) {

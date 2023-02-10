@@ -11,9 +11,9 @@ import "./../../../interfaces/ISmartContractZPController.sol";
 import "./../../../BaseUpgradeablePausable.sol";
 
 contract SmartContractZPController is ISmartContractZPController, BaseUpgradeablePausable {
+    
     uint256 public override protocolID;
     uint256 public override latestVersion; // version changes whenever there is asset liquidation, i.e. insurance gets activated
-    uint256 private withdrawalFee;
 
     struct VersionInfo {
         uint256 liquidation;
@@ -39,8 +39,10 @@ contract SmartContractZPController is ISmartContractZPController, BaseUpgradeabl
     // protocolID => VersionNumber => ProtocolInfo
     mapping(uint256 => mapping(uint256 => ProtocolRiskInfo)) public protocolsRiskInfo;
 
+    /// Maps :: epoch(uint256) => VersionInfo(struct)
     mapping(uint256 => VersionInfo) public versionLiquidationFactor; // for each insurance coverage event, keeping a track of liquidation percent
 
+    /// @notice initialize function, called during the contract initialization
     function initialize() external initializer {
         VersionInfo storage versionInfo = versionLiquidationFactor[0];
         versionInfo.liquidation = 100;

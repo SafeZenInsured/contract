@@ -1,6 +1,3 @@
-///// Unitroller in case of Sonne, Venus and Comptroller in case of Compound
-
-
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.16;
 
@@ -22,7 +19,7 @@ import "./../../../../BaseUpgradeablePausable.sol";
 
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
-contract SonneInsurance is ICompoundImplementation, BaseUpgradeablePausable {
+contract VenusInsurance is ICompoundImplementation, BaseUpgradeablePausable {
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 

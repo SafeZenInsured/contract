@@ -1,6 +1,3 @@
-///// Unitroller in case of Sonne, Venus and Comptroller in case of Compound
-
-
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.16;
 
@@ -26,14 +23,29 @@ contract SonneInsurance is ICompoundImplementation, BaseUpgradeablePausable {
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
+    /// _protocolID: unique protocol ID
+    /// _childEpoch: tim interval between any new activity recorded, i.e. supply, withdraw or liquidate
+    /// _initVersion: counter to initialize the init one-time function, max value can be 1.
+    /// PLATFORM_FEE: platform fee on the profit earned
     uint256 private _protocolID;
     uint256 private _childEpoch;
     uint256 private _initVersion;
-    IERC20Upgradeable private _tokenXVS;
-    IComptroller private _venusComptroller;
+    uint256 private constant PLATFORM_FEE = 90;
+
+    /// _tokenComp: ERC20 COMP token interface
+    /// _compoundComptroller: Compound Comptroller contract interface
+    /// _zpController: Zero Premium contract interface
+    /// _globalPauseOperation: Global Pause Operation contract interface 
+    IERC20Upgradeable private _tokenComp;
+    IComptroller private _compoundComptroller;
     ISmartContractZPController private _zpController;
     IGlobalPauseOperation private _globalPauseOperation;
-    
+
+    /// @notice stores important user-related info
+    /// isActiveInvested: checks if the user is actively invested or not
+    /// rewardWithdrawn: amount of reward token user has withdrawn
+    /// startChildEpoch: epoch number when user first interacted with the contract
+    /// previousChildEpoch: user's last contract interaction epoch number
     struct UserInfo {
         bool isActiveInvested;
         uint256 rewardWithdrawn;
@@ -41,26 +53,30 @@ contract SonneInsurance is ICompoundImplementation, BaseUpgradeablePausable {
         uint256 previousChildEpoch;
     }
 
+    /// @notice stores information related to the specific epoch number
+    /// cTokenBalance: "cumulative" cToken balance
+    /// rewardDistributionAmount: reward amount collected for the specific epoch 
     struct EpochSpecificInfo {
-        uint256 vTokenBalance;
+        uint256 cTokenBalance;
         uint256 rewardDistributionAmount;
     }
 
-    /// Maps ChildVersion => ParentVersion
+    /// Maps :: childEpoch(uint256) => zeroPremiumControllerEpoch(uint256)
     mapping(uint256 => uint256) private parentEpoch;
     
-    /// Maps => User Address => Reward Token Address => UserInfo struct
+    /// Maps :: userAddress(address) => cTokenAddress(address) => UserInfo(struct)
     mapping(address => mapping(address => UserInfo)) private usersInfo;
     
-    /// Maps => User Address => Reward Token Address => ChildVersion => UserBalance
+    /// Maps :: userAddress(address) => cTokenAddress(uint256) => childEpoch(uint256) => cTokenUserBalance(uint256)
     mapping(address => mapping(address => mapping(uint256 => uint256))) private userChildEpochBalance;
 
-    /// Maps reward address => Child Version => EpochSpecificInfo
+    /// Maps :: cTokenAddress(address) => childEpich(uint256) => EpochSpecificInfo(struct)
     mapping(address => mapping(uint256 => EpochSpecificInfo)) private epochsInfo;
     
-    /// Maps Reward token address => Previous Child Epoch
+    /// Maps :: cTokenAddress(address) => previousChildEpoch(uint256)
     mapping(address => uint256) private previousChildEpoch;
 
+    /// @notice this modifier checks if the contracts' certain function calls has to be paused temporarily
     modifier ifNotPaused() {
         require(
             (paused() != true) && 
@@ -68,17 +84,28 @@ contract SonneInsurance is ICompoundImplementation, BaseUpgradeablePausable {
         _;
     }
 
+    /// @notice initialize function, called during the contract initialization
+    /// addressComp: ERC20 COMP token address
+    /// addressPauseOperation: Global Pause Operation contract address
+    /// addressCompComptroller: Compound Comptroller contract address 
     function initialize(
-        address pauseOperationAddress,
-        address addressXVS
+        address addressComp,
+        address addressPauseOperation,
+        address addressCompComptroller
     ) external initializer {
-        _globalPauseOperation = IGlobalPauseOperation(pauseOperationAddress);
-        _tokenXVS = IERC20Upgradeable(addressXVS);
+        _compoundComptroller = IComptroller(addressCompComptroller);
+        _globalPauseOperation = IGlobalPauseOperation(addressPauseOperation);
+        _tokenComp = IERC20Upgradeable(addressComp);
         __BaseUpgradeablePausable_init(_msgSender());
     }
 
+    /// @notice one time function to initialize the contract
+    /// controllerAddress: Zero Premium Controller contract address
+    /// protocolName: Name of the protocol
+    /// deployedAddress: deployment address of this contract
+    /// protocolID: unique protocol ID generated in Zero Premium Controller contract
     function init( 
-        address _controllerAddress,
+        address controllerAddress,
         string memory protocolName,
         address deployedAddress,
         uint256 protocolID
@@ -87,7 +114,7 @@ contract SonneInsurance is ICompoundImplementation, BaseUpgradeablePausable {
             revert Compound_ZP__ImmutableChangesError();
         }
         ++_initVersion;
-        _zpController = ISmartContractZPController(_controllerAddress);
+        _zpController = ISmartContractZPController(controllerAddress);
         (string memory _protocolName, address _protocolAddress) = _zpController.getProtocolInfo(protocolID);
         if (_protocolAddress != deployedAddress) {
             revert Compound_ZP__WrongInfoEnteredError();
@@ -98,41 +125,152 @@ contract SonneInsurance is ICompoundImplementation, BaseUpgradeablePausable {
         _protocolID = protocolID;
     }
 
+    /// @notice this function aims to liquidate user's portfolio balance to compensate affected users
+    /// tokenAddresses: token addresses supported on the Compound protocol
+    /// cTokenAddresses: respective cToken addresses against the token addresses
+    /// claimSettlementAddress: claim settlement address
+    /// protocolRiskCategory: risk pool category to be liquidated
+    /// liquidationPercent: liquidation percentage, i.e. (100 - liquidation percent)
     function liquidateTokens(
         address[] memory tokenAddresses,
-        address[] memory vTokenAddresses,
+        address[] memory cTokenAddresses,
         address claimSettlementAddress,
         uint256 protocolRiskCategory,
         uint256 liquidationPercent
     ) external onlyAdmin {
-        uint256 tokenCount = vTokenAddresses.length;
+        uint256 tokenCount = cTokenAddresses.length;
         for(uint256 i = 0; i < tokenCount;) {
             if(_zpController.getProtocolRiskCategory(_protocolID) == protocolRiskCategory) {
                 IERC20Upgradeable token = IERC20Upgradeable(tokenAddresses[i]);
-                address vTokenAddress = vTokenAddresses[i];
-                uint256 previousTokenEpoch = previousChildEpoch[vTokenAddress];
-                uint256 vTokenLatestBalance = epochsInfo[vTokenAddress][previousTokenEpoch].vTokenBalance;
+                address cTokenAddress = cTokenAddresses[i];
+                uint256 previousTokenEpoch = previousChildEpoch[cTokenAddress];
+                uint256 vTokenLatestBalance = epochsInfo[cTokenAddress][previousTokenEpoch].cTokenBalance;
                 uint256 liquidatedAmount = (
                     (liquidationPercent * vTokenLatestBalance) / 100
                 );
-                uint256 earnedXVS = claimRewardXVS(vTokenAddress);
-                epochsInfo[vTokenAddress][_childEpoch].rewardDistributionAmount = earnedXVS;
-                epochsInfo[vTokenAddress][_childEpoch + 1].vTokenBalance = vTokenLatestBalance - liquidatedAmount;
-                uint256 amountLiquidated = _liquidateInternal(token, vTokenAddress, liquidatedAmount);
+                uint256 earnedXVS = _claimRewardCOMP(cTokenAddress);
+                epochsInfo[cTokenAddress][_childEpoch].rewardDistributionAmount = earnedXVS;
+                epochsInfo[cTokenAddress][_childEpoch + 1].cTokenBalance = vTokenLatestBalance - liquidatedAmount;
+                uint256 amountLiquidated = _liquidateInternal(token, cTokenAddress, liquidatedAmount);
                 token.safeTransfer(claimSettlementAddress, amountLiquidated);
-                previousChildEpoch[vTokenAddress] = _childEpoch + 1;
+                previousChildEpoch[cTokenAddress] = _childEpoch + 1;
             }
             ++i;
         }
         _incrementChildEpoch();
     }
 
+    /// @notice this function facilitate users' supply token to Compound Smart Contract
+    /// @param tokenAddress: ERC20 token address
+    /// @param cTokenAddress: ERC20 cToken address
+    /// @param amount: amount of the tokens user wishes to supply
+    /// @param deadline: ERC20 token permit deadline
+    /// @param permitV: ERC20 token permit signature (value v)
+    /// @param permitR: ERC20 token permit signature (value r)
+    /// @param permitS: ERC20 token permit signature (value s)
+    function supplyToken(
+        address tokenAddress, 
+        address cTokenAddress, 
+        uint256 amount,
+        uint256 deadline, 
+        uint8 permitV, 
+        bytes32 permitR, 
+        bytes32 permitS
+    ) external override nonReentrant returns(bool) {
+        if (amount < 1e10) {
+            revert Compound_ZP__LowSupplyAmountError();
+        }
+        _incrementChildEpoch();
+
+        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
+        IERC20Upgradeable vToken = IERC20Upgradeable(cTokenAddress);
+        IERC20PermitUpgradeable tokenWithPermit = IERC20PermitUpgradeable(tokenAddress);
+
+        if (!usersInfo[_msgSender()][cTokenAddress].isActiveInvested) {
+            usersInfo[_msgSender()][cTokenAddress].startChildEpoch = _childEpoch;
+            usersInfo[_msgSender()][cTokenAddress].isActiveInvested = true;
+        }
+        uint256 balanceBeforeSupply = vToken.balanceOf(address(this));
+        tokenWithPermit.safePermit(_msgSender(), address(this), amount, deadline, permitV, permitR, permitS);
+        token.safeTransferFrom(_msgSender(), address(this), amount);
+        token.safeIncreaseAllowance(cTokenAddress, amount);
+        
+        uint mintResult = ICErc20(cTokenAddress).mint(amount);
+        if (mintResult != 0){
+            revert Compound_ZP__TransactionFailedError();
+        }
+        uint256 balanceAfterSupply = vToken.balanceOf(address(this));
+        _supplyTokenInternal(cTokenAddress, balanceAfterSupply, balanceBeforeSupply);
+        emit SuppliedToken(_msgSender(), tokenAddress, amount);
+        return true;
+    }
+
+    /// @notice this function facilitate users' token withdrawal from contract
+    /// tokenAddress: ERC20 token address
+    /// cTokenAddress: ERC20 cToken address
+    /// amount: cToken balance user wishes to withdraw
+    function withdrawToken(
+        address tokenAddress, 
+        address cTokenAddress, 
+        uint256 amount
+    ) external override nonReentrant returns(bool) {
+        ++_childEpoch;
+        (uint256 userBalance, uint256 userRewardBalance) = calculateUserBalance(cTokenAddress);
+
+        if(userBalance < amount) {
+            revert Compound_ZP__LowAmountError();
+        }
+        uint256 previousTokenEpoch = previousChildEpoch[cTokenAddress];
+        epochsInfo[cTokenAddress][_childEpoch].cTokenBalance = (
+            epochsInfo[cTokenAddress][previousTokenEpoch].cTokenBalance - amount
+        );
+
+        uint256 earnedXVS = _claimRewardCOMP(cTokenAddress);
+        epochsInfo[cTokenAddress][_childEpoch - 1].rewardDistributionAmount = earnedXVS;
+
+        uint256 userPreviousEpoch = usersInfo[_msgSender()][cTokenAddress].previousChildEpoch;
+        userChildEpochBalance[_msgSender()][cTokenAddress][_childEpoch] = (
+            userChildEpochBalance[_msgSender()][cTokenAddress][userPreviousEpoch] - amount
+        );
+        if (amount == userBalance) {
+            usersInfo[_msgSender()][cTokenAddress].isActiveInvested = false;
+        }
+
+        usersInfo[_msgSender()][cTokenAddress].rewardWithdrawn += userRewardBalance;
+        _withdrawInternal(tokenAddress, cTokenAddress, amount);
+        _tokenComp.safeTransfer(_msgSender(), userRewardBalance);
+        return true;
+    }
+
+    /// @notice this function aims to increment the child epoch & is called during each user write call
+    function _incrementChildEpoch() private {
+        ++_childEpoch;
+        uint256 currParentVersion =  _zpController.latestVersion();
+        parentEpoch[_childEpoch] = currParentVersion;
+    }
+
+    /// @notice this function aims to claim the reward accrued during the specific epoch
+    /// cTokenAddress: cToken address
+    function _claimRewardCOMP(address cTokenAddress) private returns(uint256) {
+        ICErc20[] memory vTokens = new ICErc20[](1);
+        vTokens[0] = ICErc20(cTokenAddress);
+        uint256 balanceBeforeClaim = _tokenComp.balanceOf(address(this));
+        _compoundComptroller.claimVenus(address(this), vTokens);
+        uint256 balanceAfterClaim = _tokenComp.balanceOf(address(this));
+        uint256 earnedXVS = balanceAfterClaim - balanceBeforeClaim;
+        return earnedXVS;
+    }
+
+    /// @notice internal liquidate function, to avoid deep stack issue and having modular codebase
+    /// token: ERC20 token interface
+    /// cTokenAddress: ERC20 cToken Address
+    /// liquidatedAmount: amount to be liquidated
     function _liquidateInternal(
         IERC20Upgradeable token, 
-        address vTokenAddress,
+        address cTokenAddress,
         uint256 liquidatedAmount
     ) private returns(uint256) {
-        ICErc20 vToken = ICErc20(vTokenAddress);
+        ICErc20 vToken = ICErc20(cTokenAddress);
         uint256 balanceBeforeLiquidation = token.balanceOf(address(this));
         uint256 redeemResult = vToken.redeem(liquidatedAmount);
         if (redeemResult != 0){
@@ -143,118 +281,40 @@ contract SonneInsurance is ICompoundImplementation, BaseUpgradeablePausable {
         return amountLiquidated;
     }
 
-    function _incrementChildEpoch() private {
-        ++_childEpoch;
-        uint256 currParentVersion =  _zpController.latestVersion();
-        parentEpoch[_childEpoch] = currParentVersion;
-    }
-
-    function supplyToken(
-        address tokenAddress, 
-        address vTokenAddress, 
-        uint256 amount,
-        uint256 deadline, 
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
-    ) external override nonReentrant returns(bool) {
-        if (amount < 1e10) {
-            revert Compound_ZP__LowSupplyAmountError();
-        }
-        _incrementChildEpoch();
-
-        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
-        IERC20Upgradeable vToken = IERC20Upgradeable(vTokenAddress);
-        IERC20PermitUpgradeable tokenWithPermit = IERC20PermitUpgradeable(tokenAddress);
-
-        if (!usersInfo[_msgSender()][vTokenAddress].isActiveInvested) {
-            usersInfo[_msgSender()][vTokenAddress].startChildEpoch = _childEpoch;
-            usersInfo[_msgSender()][vTokenAddress].isActiveInvested = true;
-        }
-        uint256 balanceBeforeSupply = vToken.balanceOf(address(this));
-        tokenWithPermit.safePermit(_msgSender(), address(this), amount, deadline, v, r, s);
-        token.safeTransferFrom(_msgSender(), address(this), amount);
-        token.safeIncreaseAllowance(vTokenAddress, amount);
-        
-        uint mintResult = ICErc20(vTokenAddress).mint(amount);
-        if (mintResult != 0){
-            revert Compound_ZP__TransactionFailedError();
-        }
-        uint256 balanceAfterSupply = vToken.balanceOf(address(this));
-        _supplyTokenInternal(vTokenAddress, balanceAfterSupply, balanceBeforeSupply);
-        emit SuppliedToken(_msgSender(), tokenAddress, amount);
-        return true;
-    }
-
-    function claimRewardXVS(address vTokenAddress) private returns(uint256) {
-        ICErc20[] memory vTokens = new ICErc20[](1);
-        vTokens[0] = ICErc20(vTokenAddress);
-        uint256 balanceBeforeClaim = _tokenXVS.balanceOf(address(this));
-        _venusComptroller.claimVenus(address(this), vTokens);
-        uint256 balanceAfterClaim = _tokenXVS.balanceOf(address(this));
-        uint256 earnedXVS = balanceAfterClaim - balanceBeforeClaim;
-        return earnedXVS;
-    }
-
+    /// @notice internal supplyToken function, to avoid deep stack issue and having modular codebase
+    /// cTokenAddress: cToken address
+    /// balanceAfterSupply: cToken contract balance after token supplied
+    /// balanceBeforeSupply: cToken contract balance before token supplied
     function _supplyTokenInternal(
-        address vTokenAddress, 
+        address cTokenAddress, 
         uint256 balanceAfterSupply,
         uint256 balanceBeforeSupply
     ) private {
         uint256 vTokenIssued = (balanceAfterSupply - balanceBeforeSupply);
-        uint256 previousTokenEpoch = previousChildEpoch[vTokenAddress];
-        uint256 userPreviousEpoch = usersInfo[_msgSender()][vTokenAddress].previousChildEpoch;
-        uint256 earnedXVS = claimRewardXVS(vTokenAddress);
-        epochsInfo[vTokenAddress][_childEpoch].vTokenBalance = (
-            epochsInfo[vTokenAddress][previousTokenEpoch].vTokenBalance + vTokenIssued
+        uint256 previousTokenEpoch = previousChildEpoch[cTokenAddress];
+        uint256 userPreviousEpoch = usersInfo[_msgSender()][cTokenAddress].previousChildEpoch;
+        uint256 earnedXVS = _claimRewardCOMP(cTokenAddress);
+        epochsInfo[cTokenAddress][_childEpoch].cTokenBalance = (
+            epochsInfo[cTokenAddress][previousTokenEpoch].cTokenBalance + vTokenIssued
         );
-        epochsInfo[vTokenAddress][_childEpoch - 1].rewardDistributionAmount = earnedXVS;
-        userChildEpochBalance[_msgSender()][vTokenAddress][_childEpoch] = (
-            userChildEpochBalance[_msgSender()][vTokenAddress][userPreviousEpoch] + vTokenIssued
+        epochsInfo[cTokenAddress][_childEpoch - 1].rewardDistributionAmount = earnedXVS;
+        userChildEpochBalance[_msgSender()][cTokenAddress][_childEpoch] = (
+            userChildEpochBalance[_msgSender()][cTokenAddress][userPreviousEpoch] + vTokenIssued
         );
-        previousChildEpoch[vTokenAddress] = _childEpoch;
+        previousChildEpoch[cTokenAddress] = _childEpoch;
     }
 
-    function withdrawToken(
-        address tokenAddress, 
-        address vTokenAddress, 
-        uint256 amount
-    ) external override nonReentrant returns(bool) {
-        ++_childEpoch;
-        (uint256 userBalance, uint256 userRewardBalance) = calculateUserBalance(vTokenAddress);
-
-        if(userBalance < amount) {
-            revert Compound_ZP__LowAmountError();
-        }
-        uint256 previousTokenEpoch = previousChildEpoch[vTokenAddress];
-        epochsInfo[vTokenAddress][_childEpoch].vTokenBalance = (
-            epochsInfo[vTokenAddress][previousTokenEpoch].vTokenBalance - amount
-        );
-
-        uint256 earnedXVS = claimRewardXVS(vTokenAddress);
-        epochsInfo[vTokenAddress][_childEpoch - 1].rewardDistributionAmount = earnedXVS;
-
-        uint256 userPreviousEpoch = usersInfo[_msgSender()][vTokenAddress].previousChildEpoch;
-        userChildEpochBalance[_msgSender()][vTokenAddress][_childEpoch] = (
-            userChildEpochBalance[_msgSender()][vTokenAddress][userPreviousEpoch] - amount
-        );
-        if (amount == userBalance) {
-            usersInfo[_msgSender()][vTokenAddress].isActiveInvested = false;
-        }
-
-        usersInfo[_msgSender()][vTokenAddress].rewardWithdrawn += userRewardBalance;
-        _withdrawInternal(tokenAddress, vTokenAddress, amount);
-        _tokenXVS.safeTransfer(_msgSender(), userRewardBalance);
-        return true;
-    }
-
+    /// @notice internal withdraw function, to avoid deep stack issue and having modular codebase
+    /// tokenAddress: token address
+    /// cTokenAddress: cToken address
+    /// amount: cToken amount user wishes to withdraw
     function _withdrawInternal(
         address tokenAddress,
-        address vTokenAddress,
+        address cTokenAddress,
         uint256 amount
     ) private {
         IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
-        ICErc20 vToken = ICErc20(vTokenAddress);      
+        ICErc20 vToken = ICErc20(cTokenAddress);      
         uint256 balanceBeforeRedeem = token.balanceOf(address(this));
         uint256 redeemResult = vToken.redeem(amount);
         if (redeemResult != 0){
@@ -262,27 +322,29 @@ contract SonneInsurance is ICompoundImplementation, BaseUpgradeablePausable {
         }
         uint256 balanceAfterRedeem = token.balanceOf(address(this));
         uint256 amountToBePaid = (balanceAfterRedeem - balanceBeforeRedeem);
-        previousChildEpoch[vTokenAddress] = _childEpoch;
+        previousChildEpoch[cTokenAddress] = _childEpoch;
         token.safeTransfer(_msgSender(), amountToBePaid);  
     }
 
+    /// @notice this function aims to provide user cToken balance in real-time after any liquidations, if happened
+    /// cTokenAddress: cToken address
     function calculateUserBalance(
-        address rewardTokenAddress
+        address cTokenAddress
     ) public view override returns(uint256, uint256) {
         uint256 userBalance = 0;
         uint256 userRewardBalance = 0;
-        uint256 userStartVersion = usersInfo[_msgSender()][rewardTokenAddress].startChildEpoch;
+        uint256 userStartVersion = usersInfo[_msgSender()][cTokenAddress].startChildEpoch;
         uint256 currVersion = _childEpoch;
         uint256 riskPoolCategory = 0;
         uint256 parentVersion = 0;
         for(uint i = userStartVersion; i < currVersion;) {
             userBalance = (
-                userChildEpochBalance[_msgSender()][rewardTokenAddress][i] > 0 ? 
-                userChildEpochBalance[_msgSender()][rewardTokenAddress][i] : userBalance
+                userChildEpochBalance[_msgSender()][cTokenAddress][i] > 0 ? 
+                userChildEpochBalance[_msgSender()][cTokenAddress][i] : userBalance
             );
             uint256 rewardEarned = (
-                (userBalance * epochsInfo[rewardTokenAddress][i].rewardDistributionAmount) / 
-                epochsInfo[rewardTokenAddress][i].vTokenBalance
+                (userBalance * epochsInfo[cTokenAddress][i].rewardDistributionAmount) / 
+                epochsInfo[cTokenAddress][i].cTokenBalance
             );
             userRewardBalance += rewardEarned;
             uint256 _parentVersion = parentEpoch[i];
@@ -299,7 +361,7 @@ contract SonneInsurance is ICompoundImplementation, BaseUpgradeablePausable {
             }
             ++i; 
         }
-        userRewardBalance -= usersInfo[_msgSender()][rewardTokenAddress].rewardWithdrawn;
+        userRewardBalance -= usersInfo[_msgSender()][cTokenAddress].rewardWithdrawn;
         return (userBalance, userRewardBalance);
     }
 }

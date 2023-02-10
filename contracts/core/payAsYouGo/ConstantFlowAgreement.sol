@@ -19,7 +19,7 @@ import "./../../BaseUpgradeablePausable.sol";
 /// @custom:security-contact anshik@safezen.finance
 
 contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
-    /// _initVersion: counter to initialize the init one-time function, max value can be 1.
+    
     /// _categoriesCount: counter to keep track of the available insurance categories.
     /// _maxInsuredDays: the maximum insurance period [in days], 90 days will be kept as default.
     /// _startWaitingTime: insurance activation waiting period, 4-8 hours will be kept as default.
@@ -314,6 +314,10 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         return (success, userInsuranceInfo.insuranceCost);
     }
 
+    /// @notice this function aims to return the expected insurance cost and deadline for respective insurances
+    /// @param insuredAmount: maximum user coverage amount
+    /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
+    /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
     function getExpectedInsuranceCostAndDeadline(
         uint256 insuredAmount,
         uint256 categoryID,
@@ -337,6 +341,10 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
     }
 
     /// NOTE: few if and else to consider for globalinsuranceinfo like endtime and start time 
+    /// [FORGOT IT, WHAT IT MEANS, BUT NEED TO CHECK]
+    /// @param userAddress: user wallet address
+    /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
+    /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
     function deactivateInsurance(
         address userAddress, 
         uint256 categoryID, 
