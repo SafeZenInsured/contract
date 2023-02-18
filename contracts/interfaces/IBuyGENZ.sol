@@ -8,8 +8,14 @@ interface IBuyGENZ {
     
     // ::::::::::::::::::::::: CUSTOM ERROR CODE :::::::::::::::::::::::: //
 
-    /// @notice reverts when amount lesser than minimum acceptable amount is entered 
-    error BuySellGENZ__LowAmountError();
+    /// @notice reverts when the certain operation & functions has been paused.
+    error BuyGENZ__OperationPaused();
+
+    /// @notice reverts when user input wrong token ID which leads to zero address
+    error BuyGENZ__ZeroAddressError();
+
+    /// @notice reverts when user input amount less than the minimum acceptable amount
+    error BuyGENZ__LessThanMinimumAmountError();
 
     /// @notice reverts when user tries to withdraw token without purchasing GENZ token
     error BuyGENZ__ZeroTokensPurchasedError();
@@ -24,6 +30,14 @@ interface IBuyGENZ {
     
     // :::::::::::::::::::::::: CUSTOM EVENTS ::::::::::::::::::::::::::: //
 
+    /// @notice emits after the funds have been withdrawn
+    /// @param to: to address
+    /// @param amount: amount of tokens transferred
+    event FundsTransferred(
+        address indexed to,
+        uint256 indexed amount
+    );
+
     /// @notice emits after the contract has been initialized
     event InitializedContractBuyGENZ(address indexed adminAddress);
 
@@ -32,6 +46,34 @@ interface IBuyGENZ {
 
     /// @notice emits when the minimum withdrawal period time limit gets updated
     event UpdatedMinimumWithdrawalPeriod(uint256 indexed timeInDays);
+
+    /// @notice emits when the sale cap gets updated
+    event UpdatedSaleCap(uint256 indexed updatedSaleCap);
+
+    /// @notice emits when the new token is added for GENZ ERC20 token purchase
+    event NewTokenAdded(uint256 indexed tokenID, address indexed tokenAddress);
+
+    /// @notice emits when the bonus token period gets updated
+    event UpdatedBonusTokenPeriod(uint256 indexed timeInHours);
+
+    /// @notice emits when the bonus token percent gets updated
+    event UpdatedBonusTokenPercent(uint256 indexed updatedPercent);
+
+    /// @notice emits after the GENZ token has been bought
+    /// @param addressUser: user wallet address
+    /// @param amountInGENZ: amount of GENZ tokens user has purchased
+    event BoughtGENZ(
+        address indexed addressUser,
+        uint256 indexed amountInGENZ
+    );
+
+    /// @notice emits after the GENZ token has been transferred to user
+    /// @param addressUser: user wallet address
+    /// @param amountInGENZ: amount of GENZ tokens user has withdrawn
+    event WithdrawnGENZ(
+        address indexed addressUser,
+        uint256 indexed amountInGENZ
+    );
 
 
     // :::::::::::::::::::::::::: FUNCTIONS ::::::::::::::::::::::::::::: //
@@ -43,6 +85,7 @@ interface IBuyGENZ {
     /// @param permitR: DAI ERC20 token permit signature (value r)
     /// @param permitS: DAI ERC20 token permit signature (value s)
     function buyGENZToken(
+        uint256 tokenID,
         uint256 value,
         uint deadline, 
         uint8 permitV,
@@ -51,27 +94,7 @@ interface IBuyGENZ {
     ) external returns(bool);
 
     /// @dev this function aims to faciliate users' GENZ token withdrawal to their respcective wallets
-    function withdrawTokens() external;
-
-    
-    // ::::::::::::::::::::::::: VIEW FUNCTIONS ::::::::::::::::::::::::: //
-
-    /// @dev this function aims to calculate the current GENZ ERC20 token price
-    /// @param issuedTokensGENZ: total number of GENZ ERC20 token issued to date
-    /// @param requiredTokens: issuedTokensGENZ + amount of GENZ ERC20 user wishes to purchase
-    function calculatePriceGENZ(
-        uint256 issuedTokensGENZ, 
-        uint256 requiredTokens
-    ) external view returns(uint256, uint256);
-
-    /// @dev this function aims to returns the token in circulation
-    function getGENZTokenCount() external view returns(uint256);
-
-    /// @dev this function aims to get the current GENZ ERC20 token price with decimals
-    function getBasePriceWithDec() external view returns(uint256);
-
-    /// @dev this function aims to get the current GENZ ERC20 token price
-    function getCurrentTokenPrice() external view returns(uint256);
+    function withdrawTokens() external returns(bool);
 
 
     // :::::::::::::::::::::::: END OF INTERFACE :::::::::::::::::::::::: //

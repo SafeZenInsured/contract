@@ -7,6 +7,7 @@ pragma solidity 0.8.16;
 /// Importing required interfaces
 import "./../../../../interfaces/IGlobalPauseOperation.sol";
 import "./../../../../interfaces/AAVE/IAAVEV3Interface.sol";
+import "./../../../../interfaces/AAVE/IAAVEV3Incentives.sol";
 import "./../../../../interfaces/AAVE/IAAVEImplementation.sol"; 
 import "./../../../../interfaces/ISmartContractZPController.sol"; 
 
@@ -18,258 +19,460 @@ import "./../../../../BaseUpgradeablePausable.sol";
 
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
-
-// TODO: ADDING EVENTS
 contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
+    
+    // ::::::::::::::::: STATE VARIABLES AND DECLARATIONS :::::::::::::::: //
+    
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
-    uint256 private _protocolID;  
-    uint256 private _initVersion;
-    uint256 private _childVersion;
-    IAAVEV3Interface private _interfaceAAVEV3;
-    ISmartContractZPController private _zpController;
-    IGlobalPauseOperation private _globalPauseOperation;
+    /// protocolID: unique protocol ID
+    /// childEpoch: time interval between any new activity recorded, i.e. supply, withdraw or liquidate
+    /// initVersion: counter to initialize the init one-time function, max value can be 1.
+    /// PLATFORM_FEE: platform fee on the profit earned
+    /// rewardTokenAdddresses: AAVE reward token addresses
+    uint256 public protocolID;
+    uint256 public childEpoch;
+    uint256 public initVersion;
+    uint256 public constant PLATFORM_FEE = 90;
+    address[] public rewardTokenAddresses;
 
-    /// @dev: Struct storing the user info
-    /// @param isActiveInvested: checks if the user has already deposited funds in AAVE via us
-    /// @param startVersionBlock: keeps a record with which version user started using our protocol
+    /// interfaceAAVEV3: AAVE V3 contract interface
+    /// incentivesAAVEV3: AAVE V3 Incentives contract interface
+    /// zpController: Zero Premium contract interface
+    /// globalPauseOperation: Global Pause Operation contract interface 
+    IAAVEV3Interface public interfaceAAVEV3;
+    IAAVEV3Incentives public incentivesAAVEV3;
+    ISmartContractZPController public zpController;
+    IGlobalPauseOperation public globalPauseOperation;
+
+    /// @notice stores important user-related info
+    /// isActiveInvested: checks if the user is actively invested or not
+    /// rewardWithdrawn: amount of reward token user has withdrawn
+    /// startChildEpoch: epoch number when user first interacted with the contract
+    /// previousChildEpoch: user's last contract interaction epoch id
+    /// lastRewardWithdrawalEpoch: user's last reward withdrawal epoch id
     struct UserInfo {
         bool isActiveInvested;
-        uint256 startVersionBlock;
+        uint256 startChildEpoch;
+        uint256 previousChildEpoch;
+        uint256 lastRewardWithdrawalEpoch;
     }
 
-    struct UserTransactionInfo {
-        uint256 depositedAmount;
-        uint256 withdrawnAmount;
+    /// @notice stores information related to the specific epoch number
+    /// aTokenBalance: "cumulative" aToken balance
+    /// rewardDistributionAmount: reward amount collected for the specific epoch 
+    struct EpochSpecificInfo {
+        uint256 aTokenBalance;
+        mapping(address => uint256) rewardDistributionAmount;
     }
 
-    struct RewardInfo {
-        uint256 tokenBalance;
-        uint256 amountToBeDistributed;
-    }
+    /// @notice mapping: uint256 childEpoch => uint256 zeroPremiumControllerEpoch
+    mapping(uint256 => uint256) private parentEpoch;
 
-    /// Maps ChildVersion => ParentVersion
-    mapping(uint256 => uint256) private parentVersionInfo;
-    /// Maps --> User Address => Reward Token Address => UserInfo struct
+    /// @notice mapping: address rewardTokenAddress => bool isExist
+    mapping(address => bool) public rewardTokenExists;
+
+    /// @notice mapping: address aTokenAddress => uint256 previousChildEpoch
+    mapping(address => uint256) private previousChildEpoch;
+    
+    /// @notice mapping: address userAddress => address aTokenAddress => struct UserInfo
     mapping(address => mapping(address => UserInfo)) private usersInfo;
-    /// Maps --> User Address => Reward Token Address => ChildVersion => UserTransactionInfo
-    mapping(address => mapping(address => mapping(uint256 => UserTransactionInfo))) private userTransactionInfo;
+    
+    /// @notice mapping: address aTokenAddress => uint256 childEpoch => struct EpochSpecificInfo
+    mapping(address => mapping(uint256 => EpochSpecificInfo)) private epochsInfo;
+    
+    /// @notice mapping: address userAddress => address aTokenAddress => \
+    /// \ uint256 childEpoch => uint256 cTokenUserBalance
+    mapping(address => mapping(address => mapping(uint256 => uint256))) private userChildEpochBalance;
 
-    /// Maps reward address => Child Version => reward balance
-    mapping(address => mapping(uint256 => RewardInfo)) private rewardInfo;
+    // :::::::::::::::::::::::: WRITING FUNCTIONS :::::::::::::::::::::::: //
 
-    mapping(address => uint256) private globalTokenBalance;
+    // ::::::::::::::::::::::::: ADMIN FUNCTIONS ::::::::::::::::::::::::: //
 
-    /// @dev this modifier checks if the contract function call has to be paused temporarily
-    modifier ifNotPaused() {
-        require(
-            (paused() != true) && 
-            (_globalPauseOperation.isPaused() != true));
-        _;
-    }
-
-    function initialize(address pauseOperationAddress) external initializer {
-        _globalPauseOperation = IGlobalPauseOperation(pauseOperationAddress);
+    /// @notice initialize function, called during the contract initialization
+    /// @param addressPauseOperation: Global Pause Operation contract address
+    function initialize(
+        address addressPauseOperation
+    ) external initializer {
+        globalPauseOperation = IGlobalPauseOperation(addressPauseOperation);
         __BaseUpgradeablePausable_init(_msgSender());
     }
 
-    /// @dev Initialize this function first before running any other function
-    /// @dev Registers the AAVE protocol in the Zero Premium Controller protocol list
-    /// @param protocolName: name of the protocol: AAVE
-    /// @param deployedAddress: address of the AAVE lending pool
-    /// @dev initializing contract with AAVE v3 lending pool address and Zero Premium controller address
-    /// @param _lendingAddress: AAVE v3 lending address
-    /// @param _controllerAddress: Zero Premium Controller address
-    function init(
-        address _lendingAddress, 
-        address _controllerAddress,
-        string memory protocolName,
+    /// @notice one time function to initialize the contract and set protocolID
+    /// @dev do ensure addCoveredProtocol() function has been called in \
+    /// \ SmartContract ZP Controller contract before calling out this function
+    /// @param protocolID_: unique protocol ID generated in Zero Premium Controller contract
+    /// @param lendingAddress: AAVE V3 lending address
+    /// @param deployedAddress: deployment address of this contract
+    /// @param zpControllerAddress: Zero Premium Controller contract address
+    /// @param protocolName: Name of the protocol
+    function init( 
+        uint256 protocolID_,
+        address lendingAddress,
         address deployedAddress,
-        uint256 protocolID
+        address zpControllerAddress,
+        string memory protocolName
     ) external onlyAdmin {
-        if (_initVersion > 0) {
-            revert AAVE_ZP__ImmutableChangesError(78);
+        if (initVersion > 0) {
+            revert AAVE_ZP__InitializedEarlierError();
         }
-        ++_initVersion;
-        _interfaceAAVEV3 = IAAVEV3Interface(_lendingAddress);
-        _zpController = ISmartContractZPController(_controllerAddress);
-        (string memory _protocolName, address _protocolAddress) = _zpController.getProtocolInfo(protocolID);
+        ++initVersion;
+        interfaceAAVEV3 = IAAVEV3Interface(lendingAddress);
+        zpController = ISmartContractZPController(zpControllerAddress);
+        (string memory _protocolName, address _protocolAddress) = zpController.getProtocolInfo(protocolID_);
         if (_protocolAddress != deployedAddress) {
-            revert AAVE_ZP__WrongInfoEnteredError(85);
+            revert AAVE_ZP__WrongInfoEnteredError();
         }
         if(keccak256(abi.encodePacked(_protocolName)) != keccak256(abi.encodePacked(protocolName))) {
-            revert AAVE_ZP__WrongInfoEnteredError(88);
+            revert AAVE_ZP__WrongInfoEnteredError();
         }
-        _protocolID = protocolID;
+        protocolID = protocolID_;
     }
 
+    /// @notice this function aims to liquidate user's portfolio balance to compensate affected users
+    /// @param tokenAddresses: token addresses supported on the AAVE protocol
+    /// @param aTokenAddresses: respective aToken addresses against the token addresses
+    /// @param claimSettlementAddress: claim settlement address
+    /// @param protocolRiskCategory: risk pool category to be liquidated
+    /// @param liquidatedEpoch: parent zpController epoch ID
     function liquidateTokens(
         address[] memory tokenAddresses,
-        address[] memory rewardTokenAddresses,
+        address[] memory aTokenAddresses,
         address claimSettlementAddress,
         uint256 protocolRiskCategory,
-        uint256 liquidationPercent
+        uint256 liquidatedEpoch
     ) external onlyAdmin {
-        uint256 tokenCount = rewardTokenAddresses.length;
+        if(tokenAddresses.length != aTokenAddresses.length) {
+            revert AAVE_ZP__IncorrectAddressesInputError();
+        }
+        uint256 tokenCount = tokenAddresses.length;
+        uint256 liquidationPercent = zpController.getLiquidationFactor(liquidatedEpoch);
         for(uint256 i = 0; i < tokenCount;) {
-            if(_zpController.getProtocolRiskCategory(_protocolID) == protocolRiskCategory) {
-                uint256 liquidatedAmount = (
-                    (liquidationPercent * globalTokenBalance[rewardTokenAddresses[i]]) / 100
-                );
-                globalTokenBalance[rewardTokenAddresses[i]] -= liquidatedAmount;
+            if(zpController.getProtocolRiskCategory(protocolID) == protocolRiskCategory) {
                 IERC20Upgradeable token = IERC20Upgradeable(tokenAddresses[i]);
-                IERC20Upgradeable rewardToken = IERC20Upgradeable(rewardTokenAddresses[i]);
-                rewardToken.safeIncreaseAllowance(address(_interfaceAAVEV3), liquidatedAmount);
-                uint256 balanceBeforeRedeem = token.balanceOf(address(this));
-                _interfaceAAVEV3.withdraw(tokenAddresses[i], liquidatedAmount, address(this));
-                uint256 balanceAfterRedeem = token.balanceOf(address(this));
-                uint256 amountLiquidated = balanceAfterRedeem - balanceBeforeRedeem;
+                address aTokenAddress = aTokenAddresses[i];
+                uint256 previousTokenEpoch = previousChildEpoch[aTokenAddress];
+                uint256 aTokenLatestBalance = epochsInfo[aTokenAddress][previousTokenEpoch].aTokenBalance;
+                uint256 liquidatedAmount = (
+                    (liquidationPercent * aTokenLatestBalance) / 100
+                );
+                epochsInfo[aTokenAddress][childEpoch + 1].aTokenBalance = aTokenLatestBalance - liquidatedAmount;
+                uint256 amountLiquidated = _liquidateInternal(token, aTokenAddress, liquidatedAmount);
+                previousChildEpoch[aTokenAddress] = childEpoch + 1;
+                /// as the below operation call is in loop, violating C-E-I pattern, \
+                /// \ the function returns call status,and if false, reverts the operation.
+                bool claimSuccess = _claimRewards(aTokenAddress, childEpoch);
+                if(!claimSuccess) {
+                    revert AAVE_ZP__RewardClaimOperationReverted();
+                }
                 token.safeTransfer(claimSettlementAddress, amountLiquidated);
             }
             ++i;
         }
+        _incrementChildEpoch();
     }
+        
+    // :::::::::::::::::::::::: EXTERNAL FUNCTIONS ::::::::::::::::::::::: //
 
-
-    /// @dev supply function to supply token to the AAVE v3 Pool
-    /// In the case of AAVE V3, tokenBalance will be stored, instead of reward token balance
-    /// as during the withdraw, AAVE function asks for token address, not aToken address.
-    /// @param tokenAddress: token address of the supplied token, e.g. DAI
-    /// @param rewardTokenAddress: token address of the received token, e.g. aDAI
-    /// @param amount: amount of the tokens supplied
+    /// @notice this function facilitate users' supply token to AAVE Smart Contract
+    /// @param tokenAddress: ERC20 token address
+    /// @param aTokenAddress: ERC20 aToken address
+    /// @param amount: amount of the tokens user wishes to supply
+    /// @param deadline: ERC20 token permit deadline
+    /// @param permitV: ERC20 token permit signature (value v)
+    /// @param permitR: ERC20 token permit signature (value r)
+    /// @param permitS: ERC20 token permit signature (value s)
     function supplyToken(
         address tokenAddress, 
-        address rewardTokenAddress, 
+        address aTokenAddress, 
         uint256 amount,
         uint256 deadline, 
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
-    ) external override nonReentrant returns (bool) {
+        uint8 permitV, 
+        bytes32 permitR, 
+        bytes32 permitS
+    ) external override nonReentrant returns(bool) {
+        ifNotPaused();
         if (amount < 1e10) {
-            revert AAVE_ZP__LowSupplyAmountError(117);
+            revert AAVE_ZP__LessThanMinimumAmountError();
         }
-        ++_childVersion;
-        uint256 currParentVersion =  _zpController.latestVersion();
-        parentVersionInfo[_childVersion] = currParentVersion;
-        
+        _incrementChildEpoch();
+
         IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
-        IERC20Upgradeable rewardToken = IERC20Upgradeable(rewardTokenAddress);
+        IERC20Upgradeable aToken = IERC20Upgradeable(aTokenAddress);
         IERC20PermitUpgradeable tokenWithPermit = IERC20PermitUpgradeable(tokenAddress);
 
-        if (!usersInfo[_msgSender()][rewardTokenAddress].isActiveInvested) {
-            usersInfo[_msgSender()][rewardTokenAddress].startVersionBlock = _childVersion;
-            usersInfo[_msgSender()][rewardTokenAddress].isActiveInvested = true;
+        if (!usersInfo[_msgSender()][aTokenAddress].isActiveInvested) {
+            usersInfo[_msgSender()][aTokenAddress].startChildEpoch = childEpoch;
+            usersInfo[_msgSender()][aTokenAddress].lastRewardWithdrawalEpoch = childEpoch;
+            usersInfo[_msgSender()][aTokenAddress].isActiveInvested = true;
         }
-        uint256 balanceBeforeSupply = rewardToken.balanceOf(address(this));
-        tokenWithPermit.safePermit(_msgSender(), address(this), amount, deadline, v, r, s);
+        uint256 balanceBeforeSupply = aToken.balanceOf(address(this));
+        tokenWithPermit.safePermit(_msgSender(), address(this), amount, deadline, permitV, permitR, permitS);
         token.safeTransferFrom(_msgSender(), address(this), amount);
-        token.safeIncreaseAllowance(address(_interfaceAAVEV3), amount);
-
-        _interfaceAAVEV3.supply(tokenAddress, amount, address(this), 0);
-        uint256 balanceAfterSupply = rewardToken.balanceOf(address(this));
-        updateInfo(rewardTokenAddress, balanceAfterSupply, balanceBeforeSupply);
+        token.safeIncreaseAllowance(address(interfaceAAVEV3), amount);
+        
+        interfaceAAVEV3.supply(tokenAddress, amount, address(this), 0);
+        
+        uint256 balanceAfterSupply = aToken.balanceOf(address(this));
+        bool claimSuccess = _claimRewards(aTokenAddress, (childEpoch - 1));
+        if(!claimSuccess) {
+            revert AAVE_ZP__RewardClaimOperationReverted();
+        }
+        /// as the below operation call is made after token transfer, violating C-E-I pattern, \
+        /// \ the function returns call status,and if false, reverts the operation.
+        bool success = _supplyTokenInternal(_msgSender(), aTokenAddress, balanceBeforeSupply, balanceAfterSupply);
+        if(!success) {
+            revert AAVE_ZP__TokenSupplyOperationReverted();
+        }
         emit SuppliedToken(_msgSender(), tokenAddress, amount);
         return true;
     }
 
-    function updateInfo(
-        address rewardTokenAddress, 
-        uint256 balanceAfterSupply,
-        uint256 balanceBeforeSupply
-    ) private {
-        uint256 tokenSupplied = balanceAfterSupply - balanceBeforeSupply;
-        rewardInfo[rewardTokenAddress][_childVersion].tokenBalance += tokenSupplied;
-        rewardInfo[rewardTokenAddress][_childVersion - 1].amountToBeDistributed = (
-            balanceBeforeSupply - 
-            rewardInfo[rewardTokenAddress][_childVersion - 1].tokenBalance
-        );
-        userTransactionInfo[_msgSender()][rewardTokenAddress][_childVersion].depositedAmount += tokenSupplied;
-        globalTokenBalance[rewardTokenAddress] += tokenSupplied;
-    }
-
-    /// @dev to withdraw the tokens from the AAVE v3 lending pool
-    /// @param tokenAddress: token address of the supplied token, e.g. DAI
-    /// @param rewardTokenAddress: token address of the received token, e.g. aDAI
-    /// @param amount: token amount to be withdrawn, not reward token amount in AAVE.
+    /// @notice this function facilitate users' token withdrawal from contract
+    /// @param tokenAddress: ERC20 token address
+    /// @param aTokenAddress: ERC20 aToken address
+    /// @param amount: aToken balance user wishes to withdraw
     function withdrawToken(
         address tokenAddress, 
-        address rewardTokenAddress, 
+        address aTokenAddress, 
         uint256 amount
-    ) external ifNotPaused nonReentrant override returns(bool) {
-        ++_childVersion;
-        uint256 userBalance = calculateUserBalance(rewardTokenAddress);
-
-        if(userBalance < amount) {
-            revert AAVE_ZP__LowAmountError(155);
+    ) external override nonReentrant returns(bool) {
+        uint256 initialBalanceCheck = calculateUserBalance(_msgSender(), aTokenAddress);
+        if(initialBalanceCheck < amount) {
+            revert AAVE_ZP__LessThanMinimumAmountError();
         }
-        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
-        IERC20Upgradeable rewardToken = IERC20Upgradeable(rewardTokenAddress);
+        ifNotPaused();
+        _incrementChildEpoch();
+        bool claimSuccess = _claimRewards(aTokenAddress, (childEpoch - 1));
+        if(!claimSuccess) {
+            revert AAVE_ZP__RewardClaimOperationReverted();
+        }
+        (uint256 userBalance, uint256[] memory userRewardBalance) = calculateUserRewardAndBalance(_msgSender(), aTokenAddress);
 
-        uint256 balanceBeforeWithdraw = rewardToken.balanceOf(address(this));
-        rewardInfo[rewardTokenAddress][_childVersion].tokenBalance -= amount;
-        rewardInfo[rewardTokenAddress][_childVersion - 1].amountToBeDistributed = (
-            balanceBeforeWithdraw - 
-            rewardInfo[rewardTokenAddress][_childVersion - 1].tokenBalance
+        uint256 previousTokenEpoch = previousChildEpoch[aTokenAddress];
+        epochsInfo[aTokenAddress][childEpoch].aTokenBalance = (
+            epochsInfo[aTokenAddress][previousTokenEpoch].aTokenBalance - amount
         );
-
-        userTransactionInfo[_msgSender()][rewardTokenAddress][_childVersion].withdrawnAmount += amount;
+        
+        uint256 userPreviousEpoch = usersInfo[_msgSender()][aTokenAddress].previousChildEpoch;
+        userChildEpochBalance[_msgSender()][aTokenAddress][childEpoch] = (
+            userChildEpochBalance[_msgSender()][aTokenAddress][userPreviousEpoch] - amount
+        );
         if (amount == userBalance) {
-            usersInfo[_msgSender()][rewardTokenAddress].isActiveInvested = false;
+            usersInfo[_msgSender()][aTokenAddress].isActiveInvested = false;
         }
-        globalTokenBalance[rewardTokenAddress] -= amount;
-        IERC20Upgradeable(rewardTokenAddress).safeIncreaseAllowance(address(_interfaceAAVEV3), amount);
-        uint256 balanceBeforeRedeem = token.balanceOf(address(this));
-        _interfaceAAVEV3.withdraw(tokenAddress, amount, address(this));
-        uint256 balanceAfterRedeem = token.balanceOf(address(this));
-        uint256 amountToBePaid = (balanceAfterRedeem - balanceBeforeRedeem);
-        token.safeTransfer(_msgSender(), amountToBePaid);
-        emit WithdrawnToken(_msgSender(), tokenAddress, amountToBePaid);
+
+        
+        bool success = _withdrawInternal(_msgSender(), tokenAddress, aTokenAddress, amount);
+        if (!success) {
+            revert AAVE_ZP__TokenWithdrawalOperationReverted();
+        }
+        
+        for(uint256 i = 0; i < rewardTokenAddresses.length;) {
+            address rewardTokenAddress = rewardTokenAddresses[i];
+            if(userRewardBalance[i] > 0) {
+                IERC20Upgradeable(rewardTokenAddress).transfer(_msgSender(), userRewardBalance[i]);
+            }
+            ++i;
+        }
         return true;
     }
+
+    // :::::::::::::::::::::::: PRIVATE FUNCTIONS :::::::::::::::::::::::: //
+
+    function _addRewardToken(address addressRewardToken) private {
+        if(!rewardTokenExists[addressRewardToken]) {
+            rewardTokenExists[addressRewardToken] = true;
+            rewardTokenAddresses.push(addressRewardToken);
+        }
+    }
+
+    /// @notice this function aims to increment the child epoch & is called during each user write call
+    function _incrementChildEpoch() private {
+        ++childEpoch;
+        uint256 currParentVersion =  zpController.latestVersion();
+        parentEpoch[childEpoch] = currParentVersion;
+    }
+
+    /// @notice this function aims to claim the reward accrued during the specific epoch
+    /// aTokenAddress: aToken address
+    function _claimRewards(
+        address aTokenAddress,
+        uint256 childEpoch_
+    ) private returns(bool) {
+        address[] memory aTokens = new address[](1);
+        aTokens[0] = aTokenAddress;
+        (address[] memory rewardDistributionList, uint256[] memory rewardDistributionAmount) = incentivesAAVEV3.claimAllRewardsToSelf(aTokens);
+        
+        EpochSpecificInfo storage epochInfo = epochsInfo[aTokenAddress][childEpoch_];
+        for(uint256 i= 0; i < rewardDistributionList.length;) {
+            address addressRewardToken = rewardDistributionList[i];
+            _addRewardToken(addressRewardToken);
+            epochInfo.rewardDistributionAmount[addressRewardToken] = rewardDistributionAmount[i];
+            ++i;
+        }
+        return true;
+    }
+
+    /// @notice internal liquidate function, to avoid deep stack issue and having modular codebase
+    /// token: ERC20 token interface
+    /// aTokenAddress: ERC20 aToken Address
+    /// liquidatedAmount: amount to be liquidated
+    function _liquidateInternal(
+        IERC20Upgradeable token, 
+        address aTokenAddress,
+        uint256 liquidatedAmount
+    ) private returns(uint256) {
+        uint256 balanceBeforeLiquidation = token.balanceOf(address(this));
+        
+        interfaceAAVEV3.withdraw(aTokenAddress, liquidatedAmount, address(this));
+        
+        uint256 balanceAfterLiquidation = token.balanceOf(address(this));
+        uint256 amountLiquidated = balanceAfterLiquidation - balanceBeforeLiquidation;
+        return amountLiquidated;
+    }
+
+    /// @notice internal supplyToken function, to avoid deep stack issue and having modular codebase
+    /// aTokenAddress: aToken address
+    /// balanceAfterSupply: aToken contract balance after token supplied
+    /// balanceBeforeSupply: aToken contract balance before token supplied
+    function _supplyTokenInternal(
+        address addressUser,
+        address aTokenAddress, 
+        uint256 balanceBeforeSupply,
+        uint256 balanceAfterSupply
+    ) private returns(bool) {
+        uint256 aTokenIssued = (balanceAfterSupply - balanceBeforeSupply);
+        uint256 previousTokenEpoch = previousChildEpoch[aTokenAddress];
+        uint256 userPreviousEpoch = usersInfo[addressUser][aTokenAddress].previousChildEpoch;
+        epochsInfo[aTokenAddress][childEpoch].aTokenBalance = (
+            epochsInfo[aTokenAddress][previousTokenEpoch].aTokenBalance + aTokenIssued
+        );
+        userChildEpochBalance[addressUser][aTokenAddress][childEpoch] = (
+            userChildEpochBalance[addressUser][aTokenAddress][userPreviousEpoch] + aTokenIssued
+        );
+        previousChildEpoch[aTokenAddress] = childEpoch;
+        usersInfo[addressUser][aTokenAddress].previousChildEpoch = childEpoch;
+        return true;
+    }
+
+    /// @notice internal withdraw function, to avoid deep stack issue and having modular codebase
+    /// tokenAddress: token address
+    /// aTokenAddress: aToken address
+    /// amount: aToken amount user wishes to withdraw
+    function _withdrawInternal(
+        address addressUser,
+        address tokenAddress,
+        address aTokenAddress,
+        uint256 amount
+    ) private returns(bool) {
+        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);  
+        uint256 balanceBeforeRedeem = token.balanceOf(address(this));
+
+        interfaceAAVEV3.withdraw(aTokenAddress, amount, address(this));
+        
+        uint256 balanceAfterRedeem = token.balanceOf(address(this));
+        uint256 amountToBePaid = (balanceAfterRedeem - balanceBeforeRedeem);
+        previousChildEpoch[aTokenAddress] = childEpoch;
+        usersInfo[addressUser][aTokenAddress].previousChildEpoch = childEpoch;
+        usersInfo[addressUser][aTokenAddress].lastRewardWithdrawalEpoch = childEpoch;
+        token.safeTransfer(addressUser, amountToBePaid);  
+        return true;
+    }
+
+    // :::::::::::::::::::::::: READING FUNCTIONS :::::::::::::::::::::::: //
     
-    /// @dev calculates the user balance
-    /// @param rewardTokenAddress: token address of the token received, e.g. aDAI
+    // ::::::::::::::::::: PUBLIC PURE/VIEW FUNCTIONS :::::::::::::::::::: //
+    
+    /// @dev this function checks if the contracts' certain function calls has to be paused temporarily
+    function ifNotPaused() public view {
+        if((paused()) || (globalPauseOperation.isPaused())) {
+            revert AAVE_ZP__OperationPaused();
+        } 
+    }
+
     function calculateUserBalance(
-        address rewardTokenAddress
-    ) public view override returns(uint256) {
+        address addressUser,
+        address aTokenAddress
+    ) public view returns(uint256) {
         uint256 userBalance = 0;
-        uint256 userRewardBalance = 0;
-        uint256 userStartVersion = usersInfo[_msgSender()][rewardTokenAddress].startVersionBlock;
-        uint256 currVersion = _childVersion;
-        uint256 riskPoolCategory = 0;
         uint256 parentVersion = 0;
+        uint256 riskPoolCategory = 0;        
+        uint256 currVersion = childEpoch;
+        uint256 userStartVersion = usersInfo[addressUser][aTokenAddress].startChildEpoch;
+        
         for(uint i = userStartVersion; i < currVersion;) {
-            UserTransactionInfo memory userBalanceInfo = userTransactionInfo[_msgSender()][rewardTokenAddress][i];
-            uint256 userDepositedBalance = userBalanceInfo.depositedAmount;
-            uint256 userWithdrawnBalance = userBalanceInfo.withdrawnAmount;
-            if (userDepositedBalance > 0) {
-                userBalance += userDepositedBalance;
-            }
-            if (userWithdrawnBalance > 0) {
-                userBalance -= userWithdrawnBalance;
-            }
-            uint256 rewardEarned = (
-                (userBalance * rewardInfo[rewardTokenAddress][i].amountToBeDistributed) / 
-                rewardInfo[rewardTokenAddress][i].tokenBalance
+            userBalance = (
+                userChildEpochBalance[addressUser][aTokenAddress][i] > 0 ? 
+                userChildEpochBalance[addressUser][aTokenAddress][i] : userBalance
             );
-            userRewardBalance += rewardEarned;
-            uint256 _parentVersion = _zpController.latestVersion();
+
+            uint256 _parentVersion = parentEpoch[i];
             /// this check ensures that if liquidation has happened on a particular parent version,
             /// then user needs to liquidated once, not again and again for each child version loop call.
             if(parentVersion != _parentVersion) {
                 parentVersion = _parentVersion;
-                if (_zpController.ifProtocolUpdated(_protocolID, parentVersion)) {
-                    riskPoolCategory = _zpController.getProtocolRiskCategory(_protocolID, parentVersion);
+                if (zpController.ifProtocolUpdated(protocolID, parentVersion)) {
+                    riskPoolCategory = zpController.getProtocolRiskCategory(protocolID, parentVersion);
                 }
-                if (_zpController.isRiskPoolLiquidated(parentVersion, riskPoolCategory)) {
-                    userBalance = ((userBalance * _zpController.getLiquidationFactor(parentVersion)) / 100);
+                if (zpController.isRiskPoolLiquidated(parentVersion, riskPoolCategory)) {
+                    userBalance = ((userBalance * zpController.getLiquidationFactor(parentVersion)) / 100);
                 }
             }
             ++i; 
         }
-        userBalance += userRewardBalance;
         return userBalance;
     }
+
+    /// @notice this function aims to provide user aToken balance in real-time after any liquidations, if happened
+    /// aTokenAddress: aToken address
+    function calculateUserRewardAndBalance(
+        address addressUser,
+        address aTokenAddress
+    ) public view returns(uint256, uint256[] memory) {
+        uint256 userBalance = 0;
+        uint256 parentVersion = 0;
+        uint256 riskPoolCategory = 0;        
+        uint256 currVersion = childEpoch;
+        uint256 userStartVersion = usersInfo[addressUser][aTokenAddress].startChildEpoch;
+        
+        uint256[] memory userRewardTokensAmount = new uint256[](rewardTokenAddresses.length);
+        
+        for(uint i = userStartVersion; i < currVersion;) {
+            userBalance = (
+                userChildEpochBalance[addressUser][aTokenAddress][i] > 0 ? 
+                userChildEpochBalance[addressUser][aTokenAddress][i] : userBalance
+            );
+
+            if(usersInfo[addressUser][aTokenAddress].lastRewardWithdrawalEpoch < i) {
+                for(uint256 j = 0; j < rewardTokenAddresses.length;) {
+                    address rewardToken = rewardTokenAddresses[j];
+                    EpochSpecificInfo storage epochRewardInfo = epochsInfo[aTokenAddress][i];
+                    userRewardTokensAmount[j] += (
+                        (userBalance * epochRewardInfo.rewardDistributionAmount[rewardToken]) / epochsInfo[aTokenAddress][i].aTokenBalance
+                    );
+                    ++j;
+                }
+            }
+
+            uint256 _parentVersion = parentEpoch[i];
+            /// this check ensures that if liquidation has happened on a particular parent version,
+            /// then user needs to liquidated once, not again and again for each child version loop call.
+            if(parentVersion != _parentVersion) {
+                parentVersion = _parentVersion;
+                if (zpController.ifProtocolUpdated(protocolID, parentVersion)) {
+                    riskPoolCategory = zpController.getProtocolRiskCategory(protocolID, parentVersion);
+                }
+                if (zpController.isRiskPoolLiquidated(parentVersion, riskPoolCategory)) {
+                    userBalance = ((userBalance * zpController.getLiquidationFactor(parentVersion)) / 100);
+                }
+            }
+            ++i; 
+        }
+        return (userBalance, userRewardTokensAmount);
+    }
+
+    // ::::::::::::::::::::::::: END OF CONTRACT ::::::::::::::::::::::::: //
+
 }

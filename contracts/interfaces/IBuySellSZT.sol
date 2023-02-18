@@ -3,52 +3,96 @@ pragma solidity 0.8.16;
 
 interface IBuySellSZT {
 
-    error BuySellSZT__PausedError();
-    error BuySellSZT__LowAmountError();
-    error BuySellSZT__LowSZTBalanceError();
-    error BuySellSZT__GSZTBurnFailedError();
-    error BuySellSZT__ImmutableChangesError();
-    error BuySellSZT__TransactionFailedError();
-    error BuySellSZT__ZeroAddressTransactionError();
-    error BuySellSZT_sellSZTToken__TxnFailedError();
-    error BuySellSZT_mintGSZT__MintFailedError(); 
-    
-    event BoughtSZT(address indexed userAddress, uint256 value);
+    // ::::::::::::::::::::::: CUSTOM ERROR CODE :::::::::::::::::::::::: //
 
-    event SoldSZT(address indexed userAddress, uint256 value);
+    /// @notice reverts when GSZT ERC20 token mint fails
+    error BuySellSZT__MintFailedGSZT();
 
-    event GSZTMint(address indexed userAddress, uint256 value);
+    /// @notice reverts when GSZT ERC20 token burn fails
+    error BuySellSZT__BurnFailedGSZT();
 
-    event GSZTBurn(address indexed userAddress, uint256 value);
+    /// @notice reverts when the certain operation & functions has been paused.
+    error BuySellSZT__OperationPaused();
 
-    event TransferredSZT(address indexed from, address indexed to, uint256 value);
+    /// @notice reverts when the function access is restricted to only certain wallet or contract addresses.
+    error BuySellSZT__AccessRestricted();
 
-    event GSZTOwnershipTransferred(
-        address indexed investorAddress, 
-        address indexed newInvestorAddress, 
-        uint256 value
+    /// @notice reverts when init function has already been initialized
+    error BuySellSZT__InitializedEarlierError();
+
+    /// @notice reverts when user input amount less than the minimum acceptable amount
+    error BuySellSZT__LessThanMinimumAmountError();
+
+    // :::::::::::::::::::::::: CUSTOM EVENTS ::::::::::::::::::::::::::: //
+
+    /// @notice emits after the contract has been initialized
+    event InitializedContractBuySellSZT(address indexed addressUser);
+
+    /// @notice emits after the SZT token has been transferred to user
+    /// @param addressUser: user wallet address
+    /// @param amountInSZT: amount of SZT tokens user has purchased
+    event BoughtSZT(
+        address indexed addressUser,
+        uint256 indexed amountInSZT
     );
 
-    function viewSZTCurrentPrice() view external returns(uint);
+    /// @notice emits after the SZT token has been transferred from user to contract
+    /// @param addressUser: user wallet address
+    /// @param amountInSZT: amount of SZT tokens user has sold
+    event SoldSZT(
+        address indexed addressUser,
+        uint256 indexed amountInSZT
+    );
 
+    /// @notice emits after the GSZT token has been minted and transferred to user
+    /// @param addressUser: user wallet address
+    /// @param amountInGSZT: amount of minted GSZT ERC20 token
+    event MintedGSZT(
+        address indexed addressUser,
+        uint256 indexed amountInGSZT
+    );
+
+    // ::::::::::::::::::::: EXTERNAL FUNCTIONS ::::::::::::::::::::::::: //
+
+    /// @notice this function faciliate users' to buy SZT ERC20 non-speculative token
+    /// @param addressUser: user wallet address
+    /// @param amountInSZT: amount of SZT tokens user wishes to purchase
     function buySZTToken(
-        address userAddress,
-        uint256 _value
+        address addressUser,
+        uint256 amountInSZT
     ) external returns(bool);
 
+    /// @notice this function faciliate users' sell SZT ERC20 token
+    /// @param amountInSZT: amount of SZT tokens user wishes to sell
+    /// @param deadline: GSZT ERC20 token permit deadline
+    /// @param permitV: GSZT ERC20 token permit signature (value v)
+    /// @param permitR: GSZT ERC20 token permit signature (value r)
+    /// @param permitS: GSZT ERC20 token permit signature (value s)s
     function sellSZTToken(
-        address userAddress,
-        uint256 value,
+        address addressUser,
+        uint256 amountInSZT,
+        uint256 tokenID,
         uint256 deadline, 
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
+        uint8 permitV,
+        bytes32 permitR,
+        bytes32 permitS
     ) external returns(bool);
 
-    function getTokenCounter() external view returns(uint256);
+    // ::::::::::::::::::::::::: VIEW FUNCTIONS ::::::::::::::::::::::::: //
 
+    /// @notice this function aims to get the real time price of SZT ERC20 token
+    function getRealTimePriceSZT() external view returns(uint256);
+
+    /// @notice calculate the SZT token value for the asked amount of SZT tokens
+    /// @param issuedTokensSZT: the amount of SZT tokens in circulation
+    /// @param requiredTokens: issuedTokensSZT +  ERC20 SZT tokens user wishes to purchase
     function calculatePriceSZT(
-        uint256 issuedSZTTokens, 
+        uint256 issuedTokensSZT, 
         uint256 requiredTokens
-    ) view external returns(uint, uint);
+    ) external view returns(uint256, uint256);
+
+    function tokenCounter() external view returns(uint256);
+  
+    // :::::::::::::::::::::::: END OF INTERFACE :::::::::::::::::::::::: //
+
 }

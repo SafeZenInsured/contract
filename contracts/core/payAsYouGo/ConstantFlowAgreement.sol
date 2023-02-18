@@ -8,6 +8,7 @@ pragma solidity 0.8.16;
 import "./../../interfaces/ICFA.sol";
 import "./../../interfaces/IERC20Extended.sol";
 import "./../../interfaces/IInsuranceRegistry.sol";
+import "./../../interfaces/IGlobalPauseOperation.sol";
 
 /// Importing required libraries
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
@@ -19,152 +20,326 @@ import "./../../BaseUpgradeablePausable.sol";
 /// @custom:security-contact anshik@safezen.finance
 
 contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
-    
-    /// _categoriesCount: counter to keep track of the available insurance categories.
-    /// _maxInsuredDays: the maximum insurance period [in days], 90 days will be kept as default.
-    /// _startWaitingTime: insurance activation waiting period, 4-8 hours will be kept as default.
-    /// _minimumInsurancePeriod: the minimum insurance period, 120 minutes will be kept as default.
-    uint256 private _categoriesCount;
-    uint256 private _maxInsuredDays;
-    uint256 private _startWaitingTime;
-    uint256 private _minimumInsurancePeriod;
+
+    // :::::::::::::: STATE VARIABLES AND DECLARATIONS :::::::::::::::: //
 
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
-    /// _tokenDAI: DAI ERC20 token
-    /// _SZTDAI: sztDAI ERC20 token
-    /// _insuranceRegistry: Insurance Registry Contract
-    IERC20Extended private _SZTDAI;
-    IERC20Upgradeable private _tokenDAI;
-    IERC20PermitUpgradeable private _tokenPermitSZTDAI;
-    IInsuranceRegistry private _insuranceRegistry;
+    /// maxInsuredDays: the maximum insurance period [in days], 90 days will be kept as default.
+    /// categoriesCount: counter to keep track of the available insurance categories.
+    /// startWaitingTime: insurance activation waiting period, 4-8 hours will be kept as default.
+    /// minimumInsurancePeriod: the minimum insurance period, 120 minutes will be kept as default.
+    uint256 public maxInsuredDays;
+    uint256 public categoriesCount;
+    uint256 public startWaitingTime;
+    uint256 public minimumInsurancePeriod;
 
-    /// @dev collects user information for particular insurance
-    /// @param startTime: insurance activation time
-    /// @param validTill: insurance validation till
-    /// @param insuredAmount: maximum insurance amount covered
-    /// @param insuranceFlowRate: amount to be charged per second [insurance flow rate * amount to be insured]
-    /// @param insuranceCost: expected insurance premium cost for the registered duration
-    /// @param registrationTime: insurance registration time
-    /// @param isValid: checks whether user is an active insurance holder or not
+    /// tokenDAI: DAI ERC20 token interface
+    /// tokenSZTDAI: sztDAI ERC20 token interface
+    /// insuranceRegistry: Insurance Registry contract interface
+    /// tokenPermitSZTDAI: SZT DAI ERC20 token interface with permit
+    IERC20Extended public tokenSZTDAI;
+    IERC20Upgradeable public tokenDAI;
+    IInsuranceRegistry public insuranceRegistry;
+    IERC20PermitUpgradeable public tokenPermitSZTDAI;
+    IGlobalPauseOperation public globalPauseOperation;
+
+
+    /// @notice collects user information for particular insurance
+    /// startTime: insurance activation time
+    /// validTill: insurance validation till
+    /// insuranceCost: expected insurance premium cost for the registered duration
+    /// insuredAmount: maximum insurance amount covered
+    /// registrationTime: insurance registration time
+    /// insuranceFlowRate: amount to be charged per second [insurance flow rate * amount to be insured]
+    /// isValid: checks whether user is an active insurance holder or not
     struct UserInsuranceInfo {
         uint256 startTime;
         uint256 validTill;
+        uint256 insuranceCost;
         uint256 insuredAmount;
         uint256 registrationTime;
         uint256 insuranceFlowRate;
-        uint256 insuranceCost;
         bool isValid;
     }
 
-    /// @dev collects user global insurance information
-    /// @param validTill: expected insurance valid period
-    /// @param insuranceStreamRate: global insurance flow rate per second
-    /// @param globalInsuranceCost: expected global insurance premium cost for the registered duration
+    /// @notice collects user global insurance information
+    /// validTill: expected insurance valid period
+    /// insuranceStreamRate: global insurance flow rate per second
+    /// globalInsuranceCost: expected global insurance premium cost for the registered duration
     struct UserGlobalInsuranceInfo {
         uint256 validTill;
         uint256 insuranceStreamRate;
         uint256 globalInsuranceCost;
     }
 
-    /// @dev mapping to store UserGlobalInsuranceInfo
-    /// maps: userAddress => UserGlobalInsuranceInfo
+    /// @notice Maps :: addressUser(address) => UserGlobalInsuranceInfo(struct)
     mapping(address => UserGlobalInsuranceInfo) private usersGlobalInsuranceInfo;
 
-    /// @dev mapping to store UserInsurance Info
-    /// maps: userAddress => categoryID => subCategoryID => UserInsuranceInfo
+    /// @notice Maps :: addressUser(address) => categoryID(uint256) => subCategoryID(uint256) => UserInsuranceInfo(struct)
     mapping(address => mapping(uint256 => mapping(uint256 => UserInsuranceInfo))) private usersInsuranceInfo;
 
-    /// @dev one-time function aims to initialize the contract
-    /// @dev MUST revert if called more than once.
-    /// @param tokenDAIaddress: address of the DAI ERC20 token
-    /// @param sztDAIAddress address of the sztDAI ERC20 token
-    /// @param insuranceRegistryCA: address of the Protocol Registry contract
-    /// @param minimumInsurancePeriod: minimum insurance period
+    // ::::::::::::::::::::::::::: MODIFIER :::::::::::::::::::::::::::: //
+
+    /// @dev this modifier checks if the contracts' certain function calls has to be paused temporarily
+    modifier ifNotPaused() {
+        require(
+            (paused() != true) && 
+            (globalPauseOperation.isPaused() != true));
+        _;
+    }
+
+    // ::::::::::::::::::::::::: ADMIN FUNCTIONS ::::::::::::::::::::::::: //
+
+    /// @notice initialize function, called during the contract initialization
+    /// @param addressDAI: address of the DAI ERC20 token
+    /// @param addressSZTDAI: address of the sztDAI ERC20 token
+    /// @param addressInsuranceRegistry: address of the Protocol Registry contract
+    /// @param addressGlobalPauseOperation: Global Pause Operation contract address
+    /// @param minimumInsurancePeriod_: minimum insurance period
+    /// @param startWaitingTime_: insurance activation waiting period
+    /// @param maxInsuredDays_: the maximum insurance period [in days]
     /// @return bool: true if the function executues successfully else false.
-    /// [PRODUCTION TODO: _startWaitingTime =  startWaitingTime * 1 hours;]
-    /// [PRODUCTION TODO: _maxInsuredDays = maxInsuredDays * 1 days;]
+    /// [PRODUCTION TODO: startWaitingTime =  startWaitingTime * 1 hours;]
+    /// [PRODUCTION TODO: maxInsuredDays = maxInsuredDays * 1 days;]
     function initialize(
-        address tokenDAIaddress,
-        address sztDAIAddress,
-        address insuranceRegistryCA,
-        uint256 minimumInsurancePeriod,
-        uint256 startWaitingTime,
-        uint256 maxInsuredDays
+        address addressDAI,
+        address addressSZTDAI,
+        address addressInsuranceRegistry,
+        address addressGlobalPauseOperation,
+        uint256 minimumInsurancePeriod_,
+        uint256 startWaitingTime_,
+        uint256 maxInsuredDays_
     ) external initializer returns(bool) {
-        _categoriesCount = 0;
-        _maxInsuredDays = maxInsuredDays * 1 minutes;
-        _startWaitingTime = startWaitingTime * 1 minutes; 
-        _minimumInsurancePeriod = minimumInsurancePeriod * 1 minutes;
-        _tokenDAI = IERC20Upgradeable(tokenDAIaddress);
-        _SZTDAI = IERC20Extended(sztDAIAddress);
-        _tokenPermitSZTDAI = IERC20PermitUpgradeable(tokenDAIaddress);
-        _insuranceRegistry = IInsuranceRegistry(insuranceRegistryCA);
+        maxInsuredDays = maxInsuredDays_ * 1 minutes;
+        startWaitingTime = startWaitingTime_ * 1 minutes; 
+        minimumInsurancePeriod = minimumInsurancePeriod_ * 1 minutes;
+        tokenDAI = IERC20Upgradeable(addressDAI);
+        tokenSZTDAI = IERC20Extended(addressSZTDAI);
+        tokenPermitSZTDAI = IERC20PermitUpgradeable(addressDAI);
+        insuranceRegistry = IInsuranceRegistry(addressInsuranceRegistry);
+        globalPauseOperation = IGlobalPauseOperation(addressGlobalPauseOperation);
         __BaseUpgradeablePausable_init(_msgSender());
         return true;
     }
 
+    /// @notice this function aims to updates minimum insurance period
+    /// @param timeInMinutes: 120 minutes will be kept as default.
+    function updateMinimumInsurancePeriod(uint256 timeInMinutes) external onlyAdmin {
+        minimumInsurancePeriod = timeInMinutes * 1 minutes;
+        emit UpdatedMinimumInsurancePeriod();
+    }
+
+    /// @notice this function aims to update the insurance activation waiting period
+    /// @param timeInHours: 4-8 hours will be kept as default. 
+    function updateStartWaitingTime(uint256 timeInHours) external onlyAdmin {
+        startWaitingTime = timeInHours * 1 hours;
+        emit UpdatedStartWaitingTime();
+    }
+
+    /// @notice this function aims to update the maximum insurance period
+    /// @param timeInDays: 90 days will be kept as default.
+    function updateMaxInsuredDays(uint256 timeInDays) external onlyAdmin {
+        maxInsuredDays = timeInDays * 1 days;
+        emit UpdatedMaxInsuredDays();
+    }
+
+    /// @dev this function aims to pause the contracts' certain functions temporarily
     function pause() external onlyAdmin {
         _pause();
     }
 
+    /// @dev this function aims to resume the complete contract functionality
     function unpause() external onlyAdmin {
         _unpause();
     }
 
-    /// @dev this function aims to updates minimum insurance period
-    /// @param timeInMinutes: 120 minutes will be kept as default.
-    function updateMinimumInsurancePeriod(uint256 timeInMinutes) external onlyAdmin {
-        _minimumInsurancePeriod = timeInMinutes * 1 minutes;
-        emit UpdatedMinimumInsurancePeriod();
-    }
+    // :::::::::::::::::::::::: EXTERNAL FUNCTIONS :::::::::::::::::::::::: //
 
-    /// @dev this function aims to update the insurance activation waiting period
-    /// @param timeInHours: 4-8 hours will be kept as default. 
-    function updateStartWaitingTime(uint256 timeInHours) external onlyAdmin {
-        _startWaitingTime = timeInHours * 1 hours;
-        emit UpdatedStartWaitingTime();
-    }
-
-    /// @dev this function aims to update the maximum insurance period
-    /// @param timeInDays: 90 days will be kept as default.
-    function updateMaxInsuredDays(uint256 timeInDays) external onlyAdmin {
-        _maxInsuredDays = timeInDays * 1 days;
-        emit UpdatedMaxInsuredDays();
-    }
-
-    /// @dev this function aims to create or top-up user insurance coverage amount.
+    /// @notice this function aims to create or top-up user insurance coverage amount.
     /// @param insuredAmount: maximum user coverage amount
     /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
     /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
+    /// @param deadline: ERC20 token permit deadline
+    /// @param permitV: ERC20 token permit signature (value v)
+    /// @param permitR: ERC20 token permit signature (value r)
+    /// @param permitS: ERC20 token permit signature (value s)
     /// @return bool: true if the function executues successfully else false.
     function addInsuranceAmount(
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID, 
         uint256 deadline,
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
+        uint8 permitV, 
+        bytes32 permitR, 
+        bytes32 permitS
     ) external override nonReentrant returns(bool) {
-        uint256 minDeadlinePeriod = block.timestamp + _maxInsuredDays + 30 days; 
+        uint256 minDeadlinePeriod = block.timestamp + maxInsuredDays + 30 days; 
         if(deadline < minDeadlinePeriod) {
             revert CFA__TransactionFailedError();
         }
-        bool success = _addInsuranceAmount(insuredAmount, categoryID, subCategoryID, deadline, v, r, s);
+        bool success = _addInsuranceAmount(insuredAmount, categoryID, subCategoryID, deadline, permitV, permitR, permitS);
         return success;
     }
     
     
+
+    /// @notice this function aims to close or reduce user insurance coverage amount.
+    /// @param insuredAmount: maximum user coverage amount
+    /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
+    /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
+    /// @param deadline: ERC20 token permit deadline
+    /// @param permitV: ERC20 token permit signature (value v)
+    /// @param permitR: ERC20 token permit signature (value r)
+    /// @param permitS: ERC20 token permit signature (value s)
+    /// @param closeStream: checks whether user initiate to deactivate its insurance or not.
+    /// @return bool: true if the function executues successfully else false.
+    function minusInsuranceAmount(
+        uint256 insuredAmount, 
+        uint256 categoryID, 
+        uint256 subCategoryID,
+        uint256 deadline,
+        uint8 permitV, 
+        bytes32 permitR, 
+        bytes32 permitS,
+        bool closeStream
+    ) external override nonReentrant returns(bool) {
+        uint256 minDeadlinePeriod = block.timestamp + maxInsuredDays + 30 days; 
+        if(deadline < minDeadlinePeriod) {
+            revert CFA__TransactionFailedError();
+        }
+        bool success = _minusInsuranceAmount(insuredAmount, categoryID, subCategoryID, deadline, permitV, permitR, permitS, closeStream);
+        return success;
+    }
+    
+    function claimPremium(
+        address userAddress,
+        uint256 categoryID,
+        uint256 subCategoryID
+    ) public {
+        if (
+            getUserInsuranceValidTillInfo(userAddress, categoryID, subCategoryID) > 
+            block.timestamp
+        ) {
+            revert CFA__ActiveInsuranceExistError();
+        }
+        bool success = deactivateInsurance(userAddress, categoryID, subCategoryID);
+        if (!success) {
+            revert CFA__TransactionFailedError();
+        }
+    }
+
+    function claimPremiumCategoryWise(
+        address userAddress,
+        uint256 categoryID
+    ) external returns(bool) {
+        for(uint256 i = 1; i <= categoryID;) {
+            uint256 subCategoriesCount = insuranceRegistry.subCategoryID();
+            for(uint256 j = 1; j <= subCategoriesCount;) {
+                claimPremium(userAddress, i, j);
+                ++j;
+            }
+            ++i;
+        }
+    }
+
+    /// @param insuredAmount: insured amount
+    /// @param categoryID: like Smart Contract Insurance
+    function activateInsurance(
+        uint256 insuredAmount,
+        uint256 categoryID,
+        uint256 subCategoryID
+    ) private returns(bool, uint256) {
+        if (insuredAmount < 1e18) {
+            revert CFA__InsuranceCoverNotAvailableError();
+        }
+        if (
+            (!insuranceRegistry.ifEnoughLiquidity(categoryID, insuredAmount, subCategoryID))    
+        ) {
+            revert CFA__SubCategoryNotActiveError();
+        }
+        if (usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].isValid) {
+            revert CFA__ActiveInsuranceExistError();
+        }
+        
+        UserInsuranceInfo storage userInsuranceInfo = usersInsuranceInfo[_msgSender()][categoryID][subCategoryID];
+        UserGlobalInsuranceInfo storage userGlobalInsuranceInfo = usersGlobalInsuranceInfo[_msgSender()];
+        
+        uint256 userEstimatedBalance = tokenSZTDAI.balanceOf(_msgSender()) - userGlobalInsuranceInfo.globalInsuranceCost;
+        uint256 incomingAmountPerSec = (
+            insuranceRegistry.getStreamFlowRate(categoryID, subCategoryID) * insuredAmount) / 1e18;
+        uint256 globalIncomingAmountPerSec = userGlobalInsuranceInfo.insuranceStreamRate + incomingAmountPerSec;
+        // user balance should be enough to run the insurance for atleast minimum insurance time duration
+        if ((globalIncomingAmountPerSec * minimumInsurancePeriod) > userEstimatedBalance) {
+            revert CFA__NotEvenMinimumInsurancePeriodAmount();
+        }
+
+        uint256 validTill = (userEstimatedBalance / incomingAmountPerSec);
+        userGlobalInsuranceInfo.insuranceStreamRate += incomingAmountPerSec;
+        userInsuranceInfo.insuredAmount = insuredAmount;
+        userInsuranceInfo.insuranceFlowRate = incomingAmountPerSec;
+        userInsuranceInfo.registrationTime = block.timestamp;
+        userInsuranceInfo.startTime = block.timestamp + startWaitingTime;
+        userInsuranceInfo.validTill = (
+            validTill < maxInsuredDays ? 
+            userInsuranceInfo.startTime + validTill : userInsuranceInfo.startTime + maxInsuredDays
+        );
+        userInsuranceInfo.insuranceCost = validTill * incomingAmountPerSec;
+        userInsuranceInfo.isValid = true;
+        
+        userGlobalInsuranceInfo.globalInsuranceCost += userInsuranceInfo.insuranceCost;
+        userGlobalInsuranceInfo.validTill = (
+            userInsuranceInfo.validTill < userGlobalInsuranceInfo.validTill ? 
+            userGlobalInsuranceInfo.validTill : userInsuranceInfo.validTill
+        );
+        bool success = insuranceRegistry.addCoverageOffered(categoryID, subCategoryID, insuredAmount, incomingAmountPerSec);
+        return (success, userInsuranceInfo.insuranceCost);
+    }
+
+    /// @notice this function aims to return the expected insurance cost and deadline for respective insurances
+    /// @param insuredAmount: maximum user coverage amount
+    /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
+    /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
+    function getExpectedInsuranceCostAndDeadline(
+        uint256 insuredAmount,
+        uint256 categoryID,
+        uint256 subCategoryID
+    ) external view returns(uint256, uint256) {
+        UserGlobalInsuranceInfo memory userGlobalInsuranceInfo = usersGlobalInsuranceInfo[_msgSender()];
+        
+        uint256 userEstimatedBalance = tokenSZTDAI.balanceOf(_msgSender()) - userGlobalInsuranceInfo.globalInsuranceCost;
+        uint256 incomingAmountPerSec = (
+            insuranceRegistry.getStreamFlowRate(categoryID, subCategoryID) * insuredAmount) / 1e18;
+        
+        uint256 expectedValidTill = (userEstimatedBalance / incomingAmountPerSec);
+        uint256 validTill =  (
+            expectedValidTill < maxInsuredDays ? 
+            (block.timestamp + startWaitingTime) + expectedValidTill : 
+            (block.timestamp + startWaitingTime) + maxInsuredDays
+        );
+        uint256 insuranceCost = validTill * incomingAmountPerSec;
+        uint256 deadline = block.timestamp + maxInsuredDays + 30 days;
+        return (insuranceCost, deadline);
+    }
+
+    /// @notice this function aims to create or top-up user insurance coverage amount.
+    /// @param insuredAmount: maximum user coverage amount
+    /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
+    /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
+    /// @param deadline: ERC20 token permit deadline
+    /// @param permitV: ERC20 token permit signature (value v)
+    /// @param permitR: ERC20 token permit signature (value r)
+    /// @param permitS: ERC20 token permit signature (value s)
+    /// @return bool: true if the function executues successfully else false.
     function _addInsuranceAmount(
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID,
         uint256 deadline,
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
+        uint8 permitV, 
+        bytes32 permitR, 
+        bytes32 permitS
     ) private returns(bool) {
         uint256 newInsuredAmount = usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].insuredAmount + insuredAmount;
         if (usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].isValid) {
@@ -178,43 +353,28 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         if (!activateSuccess) {
             revert CFA__TransactionFailedError();
         }
-        _tokenPermitSZTDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, v, r, s);  
+        tokenPermitSZTDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, permitV, permitR, permitS);  
         return true;
     }
 
-    /// @dev this function aims to close or reduce user insurance coverage amount.
+    /// @notice this function aims to close or reduce user insurance coverage amount.
     /// @param insuredAmount: maximum user coverage amount
     /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
     /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
+    /// @param deadline: ERC20 token permit deadline
+    /// @param permitV: ERC20 token permit signature (value v)
+    /// @param permitR: ERC20 token permit signature (value r)
+    /// @param permitS: ERC20 token permit signature (value s)
     /// @param closeStream: checks whether user initiate to deactivate its insurance or not.
-    /// @return bool: true if the function executues successfully else false.
-    function minusInsuranceAmount(
-        uint256 insuredAmount, 
-        uint256 categoryID, 
-        uint256 subCategoryID,
-        uint256 deadline,
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s,
-        bool closeStream
-    ) external override nonReentrant returns(bool) {
-        uint256 minDeadlinePeriod = block.timestamp + _maxInsuredDays + 30 days; 
-        if(deadline < minDeadlinePeriod) {
-            revert CFA__TransactionFailedError();
-        }
-        bool success = _minusInsuranceAmount(insuredAmount, categoryID, subCategoryID, deadline, v, r, s, closeStream);
-        return success;
-    }
-    
-    
+    /// @return bool: true if the function executues successfully else false.    
     function _minusInsuranceAmount(
         uint256 insuredAmount, 
         uint256 categoryID, 
         uint256 subCategoryID,
         uint256 deadline,
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s,
+        uint8 permitV, 
+        bytes32 permitR, 
+        bytes32 permitS,
         bool closeStream
     ) private returns(bool) {
         if (!usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].isValid) {
@@ -230,114 +390,10 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
             if (!activateSuccess) {
                 revert CFA__TransactionFailedError();
             }
-            _tokenPermitSZTDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, v, r, s);  
+            tokenPermitSZTDAI.safePermit(_msgSender(), address(this), insuranceCost, deadline, permitV, permitR, permitS);  
 
         }
         return true;
-    }
-
-    function claimPremium(
-        address userAddress,
-        uint256 categoryID,
-        uint256 subCategoryID
-    ) external returns(bool) {
-        if (
-            getUserInsuranceValidTillInfo(userAddress, categoryID, subCategoryID) > 
-            block.timestamp
-        ) {
-            revert CFA__ActiveInsuranceExistError();
-        }
-        bool success = deactivateInsurance(userAddress, categoryID, subCategoryID);
-        if (!success) {
-            revert CFA__TransactionFailedError();
-        }
-        return true;
-    }
-
-    function claimPremium(
-        address userAddress,
-        uint256 categoryID
-    ) external returns(bool) {
-
-    }
-
-    /// @param insuredAmount: insured amount
-    /// @param categoryID: like Smart Contract Insurance
-    function activateInsurance(
-        uint256 insuredAmount,
-        uint256 categoryID,
-        uint256 subCategoryID
-    ) private returns(bool, uint256) {
-        if (insuredAmount < 1e18) {
-            revert CFA__InsuranceCoverNotAvailableError();
-        }
-        if (
-            (!_insuranceRegistry.ifEnoughLiquidity(categoryID, insuredAmount, subCategoryID))    
-        ) {
-            revert CFA__SubCategoryNotActiveError();
-        }
-        if (usersInsuranceInfo[_msgSender()][categoryID][subCategoryID].isValid) {
-            revert CFA__ActiveInsuranceExistError();
-        }
-        
-        UserInsuranceInfo storage userInsuranceInfo = usersInsuranceInfo[_msgSender()][categoryID][subCategoryID];
-        UserGlobalInsuranceInfo storage userGlobalInsuranceInfo = usersGlobalInsuranceInfo[_msgSender()];
-        
-        uint256 userEstimatedBalance = _SZTDAI.balanceOf(_msgSender()) - userGlobalInsuranceInfo.globalInsuranceCost;
-        uint256 incomingAmountPerSec = (
-            _insuranceRegistry.getStreamFlowRate(categoryID, subCategoryID) * insuredAmount) / 1e18;
-        uint256 globalIncomingAmountPerSec = userGlobalInsuranceInfo.insuranceStreamRate + incomingAmountPerSec;
-        // user balance should be enough to run the insurance for atleast minimum insurance time duration
-        if ((globalIncomingAmountPerSec * _minimumInsurancePeriod) > userEstimatedBalance) {
-            revert CFA__NotEvenMinimumInsurancePeriodAmount();
-        }
-
-        uint256 validTill = (userEstimatedBalance / incomingAmountPerSec);
-        userGlobalInsuranceInfo.insuranceStreamRate += incomingAmountPerSec;
-        userInsuranceInfo.insuredAmount = insuredAmount;
-        userInsuranceInfo.insuranceFlowRate = incomingAmountPerSec;
-        userInsuranceInfo.registrationTime = block.timestamp;
-        userInsuranceInfo.startTime = block.timestamp + _startWaitingTime;
-        userInsuranceInfo.validTill = (
-            validTill < _maxInsuredDays ? 
-            userInsuranceInfo.startTime + validTill : userInsuranceInfo.startTime + _maxInsuredDays
-        );
-        userInsuranceInfo.insuranceCost = validTill * incomingAmountPerSec;
-        userInsuranceInfo.isValid = true;
-        
-        userGlobalInsuranceInfo.globalInsuranceCost += userInsuranceInfo.insuranceCost;
-        userGlobalInsuranceInfo.validTill = (
-            userInsuranceInfo.validTill < userGlobalInsuranceInfo.validTill ? 
-            userGlobalInsuranceInfo.validTill : userInsuranceInfo.validTill
-        );
-        bool success = _insuranceRegistry.addCoverageOffered(categoryID, subCategoryID, insuredAmount, incomingAmountPerSec);
-        return (success, userInsuranceInfo.insuranceCost);
-    }
-
-    /// @notice this function aims to return the expected insurance cost and deadline for respective insurances
-    /// @param insuredAmount: maximum user coverage amount
-    /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
-    /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
-    function getExpectedInsuranceCostAndDeadline(
-        uint256 insuredAmount,
-        uint256 categoryID,
-        uint256 subCategoryID
-    ) external view returns(uint256, uint256) {
-        UserGlobalInsuranceInfo memory userGlobalInsuranceInfo = usersGlobalInsuranceInfo[_msgSender()];
-        
-        uint256 userEstimatedBalance = _SZTDAI.balanceOf(_msgSender()) - userGlobalInsuranceInfo.globalInsuranceCost;
-        uint256 incomingAmountPerSec = (
-            _insuranceRegistry.getStreamFlowRate(categoryID, subCategoryID) * insuredAmount) / 1e18;
-        
-        uint256 expectedValidTill = (userEstimatedBalance / incomingAmountPerSec);
-        uint256 validTill =  (
-            expectedValidTill < _maxInsuredDays ? 
-            (block.timestamp + _startWaitingTime) + expectedValidTill : 
-            (block.timestamp + _startWaitingTime) + _maxInsuredDays
-        );
-        uint256 insuranceCost = validTill * incomingAmountPerSec;
-        uint256 deadline = block.timestamp + _maxInsuredDays + 30 days;
-        return (insuranceCost, deadline);
     }
 
     /// NOTE: few if and else to consider for globalinsuranceinfo like endtime and start time 
@@ -368,37 +424,37 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         usersGlobalInsuranceInfo[userAddress].globalInsuranceCost -= userInsuranceInfo.insuranceCost;
         uint256 flowRate = userInsuranceInfo.insuranceFlowRate;
         uint256 insuredAmount = userInsuranceInfo.insuredAmount;
-        bool success = _insuranceRegistry.removeCoverageOffered(categoryID, subCategoryID, insuredAmount, flowRate);
-        bool burnSuccess = _SZTDAI.burnFrom(userAddress, amountToBeBurned);
+        bool success = insuranceRegistry.removeCoverageOffered(categoryID, subCategoryID, insuredAmount, flowRate);
+        bool burnSuccess = tokenSZTDAI.burnFrom(userAddress, amountToBeBurned);
         if ((!success) || (!burnSuccess)) {
             revert CFA__TransactionFailedError();
         }
         return true;
     }
 
-    /// @dev this function aims to deactivate user's all activated insurance in a single-call.
+    /// @notice this function aims to deactivate user'permitS all activated insurance in a single-call.
     /// @param userAddress: user wallet address
     /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
     function deactivateCategoryInsurance(
         address userAddress, 
         uint256 categoryID
     ) private returns(bool) {
-        uint256[] memory activeID = findActivePremiumCost(userAddress, categoryID, _insuranceRegistry.getLatestSubCategoryID(categoryID));
+        uint256[] memory activeID = findActivePremiumCost(userAddress, categoryID, insuranceRegistry.getLatestSubCategoryID(categoryID));
         uint256 expectedAmountToBePaid = _calculateTotalFlowMade(userAddress, categoryID, activeID);
         for(uint256 i=0; i < activeID.length;) {
             usersInsuranceInfo[userAddress][categoryID][activeID[i]].isValid = false;
             uint256 flowRate = usersInsuranceInfo[userAddress][categoryID][activeID[i]].insuranceFlowRate;
             uint256 insuredAmount = usersInsuranceInfo[userAddress][categoryID][activeID[i]].insuredAmount;
-            bool coverageRemoveSuccess = _insuranceRegistry.removeCoverageOffered(categoryID, activeID[i], insuredAmount, flowRate);
+            bool coverageRemoveSuccess = insuranceRegistry.removeCoverageOffered(categoryID, activeID[i], insuredAmount, flowRate);
             if (!coverageRemoveSuccess) {
                 revert CFA__TransactionFailedError();
             }
             ++i;
         }
-        uint256 userBalance = _SZTDAI.balanceOf(userAddress); 
+        uint256 userBalance = tokenSZTDAI.balanceOf(userAddress); 
         uint256 amountToBeBurned = expectedAmountToBePaid > userBalance ? userBalance : expectedAmountToBePaid;
         usersGlobalInsuranceInfo[userAddress].insuranceStreamRate = 0;
-        bool success = _SZTDAI.burnFrom(userAddress, amountToBeBurned);
+        bool success = tokenSZTDAI.burnFrom(userAddress, amountToBeBurned);
         if (!success) {
             revert CFA__TransactionFailedError();
         }
@@ -438,9 +494,9 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         address userAddress
     ) external view returns(uint256) {
         uint256 globalBalanceToBePaid = 0;
-        for(uint256 i=0; i < _categoriesCount;) {
+        for(uint256 i=0; i < categoriesCount;) {
             uint256 balanceToBePaid = 0;
-            uint256[] memory activeID = findActivePremiumCost(userAddress, i, _insuranceRegistry.getLatestSubCategoryID(i));
+            uint256[] memory activeID = findActivePremiumCost(userAddress, i, insuranceRegistry.getLatestSubCategoryID(i));
             for(uint256 j=0; j < activeID.length;) {
                 UserInsuranceInfo storage userActiveInsuranceInfo = usersInsuranceInfo[userAddress][i][activeID[j]];
                 uint256 duration = (
@@ -482,7 +538,7 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         uint256 categoryID
     ) external view override returns(uint256) {
         uint256 balanceToBePaid = 0;
-        uint256[] memory activeID = findActivePremiumCost(userAddress, categoryID, _insuranceRegistry.getLatestSubCategoryID(categoryID));
+        uint256[] memory activeID = findActivePremiumCost(userAddress, categoryID, insuranceRegistry.getLatestSubCategoryID(categoryID));
         for(uint256 i=0; i< activeID.length;){
             UserInsuranceInfo storage userActiveInsuranceInfo = usersInsuranceInfo[userAddress][categoryID][activeID[i]];
             uint256 duration = (

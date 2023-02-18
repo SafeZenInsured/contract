@@ -3,13 +3,27 @@ pragma solidity 0.8.16;
 
 interface IAAVEImplementation {
 
-    /// Custom Error Codes
-    error AAVEV3Insurance_ZP__TransactionFailedError();
-    error AAVE_ZP__LowSupplyAmountError(uint256 errorLineNumber);
-    error AAVE_ZP__WrongInfoEnteredError(uint256 errorLineNumber);
-    error AAVE_ZP__ImmutableChangesError(uint256 errorLineNumber);
-    error AAVE_ZP__TransactionFailedError(uint256 errorLineNumber);
-    error AAVE_ZP__LowAmountError(uint256 errorLineNumber);
+    // :::::::::::::::::::::::: CUSTOM ERROR CODE :::::::::::::::::::::::: //
+
+    error AAVE_ZP__OperationPaused();
+    
+    error AAVE_ZP__TokenSupplyFailed();
+
+    error AAVE_ZP__WrongInfoEnteredError();
+
+    error AAVE_ZP__InitializedEarlierError();
+
+    error AAVE_ZP__LessThanMinimumAmountError();
+
+    error AAVE_ZP__TokenSupplyOperationReverted();
+
+    error AAVE_ZP__RewardClaimOperationReverted();
+
+    error AAVE_ZP__IncorrectAddressesInputError();
+
+    error AAVE_ZP__TokenWithdrawalOperationReverted();
+
+    // :::::::::::::::::::::::::: CUSTOM EVENTS :::::::::::::::::::::::::: //
 
     event SuppliedToken(
         address indexed userAddress, 
@@ -23,6 +37,10 @@ interface IAAVEImplementation {
         uint256 indexed amount
     );
 
+    // :::::::::::::::::::::::: WRITING FUNCTIONS :::::::::::::::::::::::: //
+    
+    // :::::::::::::::::::::::: EXTERNAL FUNCTIONS ::::::::::::::::::::::: //
+    
     function supplyToken(
         address tokenAddress, 
         address rewardTokenAddress, 
@@ -38,7 +56,5 @@ interface IAAVEImplementation {
         address rewardTokenAddress, 
         uint256 _amount
     ) external returns(bool);
-
-    function calculateUserBalance(address rewardTokenAddress) external view returns(uint256);
 
 }

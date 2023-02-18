@@ -17,8 +17,4 @@ interface IGENZStaking {
 
     function withdrawGENZ(uint256 _value) external returns(bool);
 
-    function totalTokensStaked() external view returns(uint256);
-
-    function getUserStakedGENZBalance() external view returns(uint256);
-
 }

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity 0.8.16;
 
-import "./IAaveIncentivesController.sol";
-
 interface IAAVEERC20 {
     // minting fake tokens for testnet purpose
     function mint(uint256 value) external returns (bool);
@@ -20,7 +18,4 @@ interface IAAVEERC20 {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 
     function approve(address account, uint256 amount) external returns (bool);
-
-    function getIncentivesController() external view returns (IAaveIncentivesController);
-
 }

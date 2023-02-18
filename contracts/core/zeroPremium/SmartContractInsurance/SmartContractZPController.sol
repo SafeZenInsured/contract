@@ -14,6 +14,7 @@ contract SmartContractZPController is ISmartContractZPController, BaseUpgradeabl
     
     uint256 public override protocolID;
     uint256 public override latestVersion; // version changes whenever there is asset liquidation, i.e. insurance gets activated
+    uint256 public STANDARD_PLATFORM_FEE = 90;
 
     struct VersionInfo {
         uint256 liquidation;

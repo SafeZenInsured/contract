@@ -21,15 +21,17 @@ error GENZStaking__NotAMinimumStakeAmountError();
 /// NOTE: Staking tokens would be used for activities like flash loans 
 /// to generate rewards for the staked users
 contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
-    uint256 private _currVersion;
-    uint256 private _minStakeValue;
-    uint256 private _withdrawTimer;
-    uint256 public override totalTokensStaked;
-    IERC20Upgradeable private immutable _tokenGENZ;
+
+    // :::::::::::::: STATE VARIABLES AND DECLARATIONS :::::::::::::::: //
 
     using SafeERC20Upgradeable for IERC20Upgradeable;
 
-    /// TODO: Versionable Info data to be included in functions
+    uint256 public currVersion;
+    uint256 public minStakeValue;
+    uint256 public withdrawTimer;
+    uint256 public totalTokensStaked;
+    IERC20Upgradeable public immutable tokenGENZ;
+
     struct VersionableInfo {
         uint256 startTime;
         uint256 endTime;
@@ -65,52 +67,52 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
     /// userAddress => versionID => UserBalanceInfo
     mapping(address => mapping(uint256 => UserBalanceInfo)) private usersBalanceInfo;
 
-    /// [PRODUCTION TODO: _withdrawTimer = timeInDays * 1 days;]
-    constructor(
-        address tokenAddressGENZ
-    ) {
-        _minStakeValue = 1e18;
-        _tokenGENZ = IERC20Upgradeable(tokenAddressGENZ);
+    /// [PRODUCTION TODO: withdrawTimer = timeInDays * 1 days;]
+    constructor(address tokenAddressGENZ) {
+        minStakeValue = 1e18;
+        tokenGENZ = IERC20Upgradeable(tokenAddressGENZ);
     }
 
     function initialize(uint256 timeInDays) external initializer {
-        _withdrawTimer = timeInDays * 1 minutes;
+        withdrawTimer = timeInDays * 1 minutes;
         __BaseUpgradeablePausable_init(_msgSender());
     }
 
+    /// @dev this function aims to pause the contracts' certain functions temporarily
     function pause() external onlyAdmin {
         _pause();
     }
 
+    /// @dev this function aims to resume the complete contract functionality
     function unpause() external onlyAdmin {
         _unpause();
     }
 
     function updateMinimumStakeAmount(uint256 value) external onlyAdmin {
-        _minStakeValue = value;
+        minStakeValue = value;
         emit UpdatedMinStakingAmount(value);
     }
 
-    /// [PRODUCTION TODO: _withdrawTimer = timeInHours * 1 hours;]
+    /// [PRODUCTION TODO: withdrawTimer = timeInHours * 1 hours;]
     function setWithdrawTime(uint256 timeInMinutes) external onlyAdmin {
-        _withdrawTimer = timeInMinutes * 1 minutes;
+        withdrawTimer = timeInMinutes * 1 minutes;
         emit UpdatedWithdrawTimer(timeInMinutes);
     }
 
     function stakeGENZ(uint256 value) public override nonReentrant returns(bool) {
-        if (value < _minStakeValue) {
+        if (value < minStakeValue) {
             revert GENZStaking__NotAMinimumStakeAmountError();
         }
-        ++_currVersion;
+        ++currVersion;
         UserInfo storage userInfo = usersInfo[_msgSender()];
         if(!userInfo.hasStaked) {
             userInfo.hasStaked = true;
-            userInfo.startVersionBlock = _currVersion;
+            userInfo.startVersionBlock = currVersion;
         }
         userInfo.stakedTokens += value;
-        usersBalanceInfo[_msgSender()][_currVersion].stakedTokens = value;        
+        usersBalanceInfo[_msgSender()][currVersion].stakedTokens = value;        
         totalTokensStaked += value;
-        _tokenGENZ.safeTransferFrom(_msgSender(), address(this), value);
+        tokenGENZ.safeTransferFrom(_msgSender(), address(this), value);
         emit StakedGENZ(_msgSender(), value);
         return true;
     }
@@ -124,7 +126,7 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
             WithdrawWaitPeriod storage waitingTimeCountdown = checkWaitTime[_msgSender()];
             waitingTimeCountdown.ifTimerStarted = true;
             waitingTimeCountdown.GENZTokenCount = value;
-            waitingTimeCountdown.canWithdrawTime = _withdrawTimer + block.timestamp;
+            waitingTimeCountdown.canWithdrawTime = withdrawTimer + block.timestamp;
             return true;
         }
         return false;
@@ -139,28 +141,25 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
         ) {
             revert GENZStaking__TransactionFailedError();
         }
-        ++_currVersion;
+        ++currVersion;
         totalTokensStaked -= value;
         userInfo.stakedTokens -= value;
-        usersBalanceInfo[_msgSender()][_currVersion].withdrawnTokens = value;
+        usersBalanceInfo[_msgSender()][currVersion].withdrawnTokens = value;
         if (checkWaitTime[_msgSender()].GENZTokenCount == value) {
             checkWaitTime[_msgSender()].ifTimerStarted = false;
         }
         checkWaitTime[_msgSender()].GENZTokenCount -= value;
-        _tokenGENZ.safeTransfer(_msgSender(), value);
+        tokenGENZ.safeTransfer(_msgSender(), value);
         emit UnstakedGENZ(_msgSender(), value);
         return true;
     }
 
-    function getVersionID() public view returns(uint256) {
-        return _currVersion;
-    }
 
     function getActiveVersionID() internal view returns(uint256[] memory) {
         uint256 activeCount = 0;
         uint256 userStartVersion = usersInfo[_msgSender()].startVersionBlock;
-        uint256 currVersion =  getVersionID();
-        for(uint256 i = userStartVersion; i <= currVersion;) {
+        uint256 currVersion_ =  currVersion;
+        for(uint256 i = userStartVersion; i <= currVersion_;) {
             if (usersBalanceInfo[_msgSender()][i].stakedTokens > 0) {
                 ++activeCount;
             }
@@ -171,7 +170,7 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
         }
         uint256[] memory activeVersionID = new uint256[](activeCount);
         uint256 counter = 0;
-        for(uint i = userStartVersion; i <= currVersion;) {
+        for(uint i = userStartVersion; i <= currVersion_;) {
             UserBalanceInfo memory userBalance = usersBalanceInfo[_msgSender()][i];
             if(userBalance.stakedTokens > 0) {
                 activeVersionID[counter] = i;
@@ -191,7 +190,7 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
         uint256 startVersionID = activeVersionID[0];
         uint256 userPremiumEarned = 0;
         uint256 counter = 0;
-        for(uint256 i = startVersionID; i <= _currVersion;) {
+        for(uint256 i = startVersionID; i <= currVersion;) {
             UserBalanceInfo memory userVersionBalance = usersBalanceInfo[_msgSender()][i];
             if(activeVersionID[counter] == i) {
                 if (userVersionBalance.stakedTokens > 0) {
@@ -208,13 +207,5 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
             ++i;
         }
         return userPremiumEarned;
-    }
-
-    function getUserStakedGENZBalance() external view override returns(uint256) {
-        return (usersInfo[_msgSender()].stakedTokens > 0 ? usersInfo[_msgSender()].stakedTokens : 0);
-    }
-
-    function getStakerClaimedRewardInfo() external view returns(uint256) {
-        return usersInfo[_msgSender()].claimedRewards;
     }
 }

@@ -17,38 +17,44 @@ import "./../../BaseUpgradeablePausable.sol";
 
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
+
+/// [PRODUCTION TODO: minWithdrawalPeriod = timeInDays * 1 days;]
+/// [PRODUCTION TODO: minWithdrawalPeriod = 7 days;]
+/// INTEGRATING UNISWAP LIQUIDITY FUNCTION & COVERAGE FUNCTION
+
 contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
+
+    
+    // ::::::::::::::::: STATE VARIABLES AND DECLARATIONS :::::::::::::::: //
 
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
-    /// _saleCap: maximum GENZ ERC20 tokens to be sold in the given sale period
-    /// _tokenCounter: GENZ ERC20 tokens in circulation
-    /// _baseSalePrice: GENZ ERC20 token base sale price
-    /// _basePriceWithDec: GENZ ERC20 token base sale price with decimals
-    /// _bonusTokenPeriod: Bonus GENZ ERC20 token sale period
-    /// _bonusTokenPercent: Bonus GENZ ERC20 token percentage to be rewarded
-    /// _minWithdrawalPeriod: Minimum Withdrawal period to withdraw GENZ ERC20 token
-    /// _commonRatio: ratio for GENZ ERC20 token price calculation
+    /// saleCap: maximum GENZ ERC20 tokens to be sold in the given sale period
+    /// tokenID: unique token ID for acceptable token addresses
+    /// tokenCounter: GENZ ERC20 tokens in circulation
+    /// basePriceWithDec: GENZ ERC20 token base sale price with decimals
+    /// bonusTokenPeriod: Bonus GENZ ERC20 token sale period
+    /// bonusTokenPercent: Bonus GENZ ERC20 token percentage to be rewarded
+    /// minWithdrawalPeriod: Minimum Withdrawal period to withdraw GENZ ERC20 token
     /// WITHDRAWAL_PERIOD_MULTIPLIER: Withdrawal period multiplier to delay token withdrawal
-    uint256 private _saleCap;
-    uint256 private _tokenCounter;
-    uint256 private _baseSalePrice;
-    uint256 private _basePriceWithDec;
-    uint256 private _bonusTokenPeriod;
-    uint256 private _bonusTokenPercent;
-    uint256 private _minWithdrawalPeriod;
-    uint256 private immutable _commonRatio;
-    uint256 private constant WITHDRAWAL_PERIOD_MULTIPLIER = 8 hours;
+    uint256 public saleCap;
+    uint256 public tokenID;
+    uint256 public totalSupply;
+    uint256 public tokenCounter;
+    uint256 public basePriceWithDec;
+    uint256 public bonusTokenPeriod;
+    uint256 public bonusTokenPercent;
+    uint256 public minWithdrawalPeriod;
+    uint256 public constant WITHDRAWAL_PERIOD_MULTIPLIER = 8 hours;
 
-    /// _tokenDAI: DAI ERC20 token interface
-    /// _tokenUSDC: USDC ERC20 token interface
-    /// _globalPauseOperation: Global Pause Operations contract interface
-    /// _tokenPermitDAI: DAI ERC20 token interface with permit
-    IERC20Upgradeable private immutable _tokenDAI;
-    IERC20Upgradeable private immutable _tokenGENZ;
-    IGlobalPauseOperation private _globalPauseOperation;
-    IERC20PermitUpgradeable private immutable _tokenPermitDAI;
+    /// tokenGENZ: GENZ ERC20 token interface
+    /// globalPauseOperation: Global Pause Operations contract interface
+    IERC20Upgradeable public immutable tokenGENZ;
+    IGlobalPauseOperation public globalPauseOperation;
+
+    /// @notice Maps :: tokenID(uint256) => tokenAddress(address)
+    mapping(uint256 => address) public permissionedTokens;
 
     /// @dev collects user information related to GENZ ERC20 token purchase
     /// @param hasBought: checks whether user bought GENZ ERC20 token or not
@@ -60,56 +66,97 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
         uint256 minWithdrawTime;
     }
 
-    /// Maps:: uint256 userAddress => struct UserInformation
-    mapping(address => UserInformation) private usersInformation;
+    /// @notice Maps:: addressUser(address) => UserInformation(struct)
+    mapping(address => UserInformation) public usersInformation;
 
-    /// @dev this modifier checks if the contracts' certain function calls has to be paused temporarily
-    modifier ifNotPaused() {
-        require(
-            (paused() != true) && 
-            (_globalPauseOperation.isPaused() != true));
-        _;
-    }
+    // ::::::::::::::::::::::::::: CONSTRUCTOR ::::::::::::::::::::::::::: //
 
-    /// @dev initializing _tokenDAI
-    /// @param value: value of the common Ratio
-    /// @param decimals: decimals against the value of the commmon ratio
-    /// @param tokenDAI: address of the DAI ERC20 token
-    /// @param tokenGENZ: address of the GENZ ERC20 token
+    /// @dev initializing ERC20 GENZ token
+    /// @param addressGENZ: GENZ ERC20 token address
     /// @custom:oz-upgrades-unsafe-allow-constructor
-    constructor(uint256 value, uint256 decimals, address tokenDAI, address tokenGENZ) {
-        _tokenDAI = IERC20Upgradeable(tokenDAI); 
-        _tokenGENZ = IERC20Upgradeable(tokenGENZ); 
-        _tokenPermitDAI = IERC20PermitUpgradeable(tokenDAI);
-        _commonRatio = (value * 10e17) / (10 ** decimals); // Immutable
+    constructor(address addressGENZ) {
+        tokenGENZ = IERC20Upgradeable(addressGENZ);
     }
+
+    // ::::::::::::::::::::::::: ADMIN FUNCTIONS ::::::::::::::::::::::::: //
 
     /// @dev initialize function, called during the contract initialization
-    /// @param pauseOperationAddress: address of the Global Pause Operation contract
+    /// @param addressDAI: DAI ERC20 token address
+    /// @param addressGlobalPauseOperation: Global Pause Operation contract address
     function initialize(
-        address pauseOperationAddress
+        address addressDAI,
+        address addressGlobalPauseOperation
     ) external initializer {
-        _baseSalePrice = 1;
-        _basePriceWithDec = 1e18;
-        _globalPauseOperation = IGlobalPauseOperation(pauseOperationAddress);
+        ++tokenID;
+        saleCap = 1e25;
+        totalSupply = 1e26;
+        basePriceWithDec = 1e17;
+        bonusTokenPeriod = block.timestamp + 2 days;
+        bonusTokenPercent = 1;
+        minWithdrawalPeriod = 10 minutes;
+        permissionedTokens[tokenID] = addressDAI;
+        globalPauseOperation = IGlobalPauseOperation(addressGlobalPauseOperation);
         __BaseUpgradeablePausable_init(_msgSender());
         emit InitializedContractBuyGENZ(_msgSender());
+    }
+
+    /// @notice this function facilitates withdrawal of funds for project operations
+    /// @param to: destination address
+    /// @param tokenID_: unique token ID
+    /// @param amount: amount to be transferred
+    function transferFunds(
+        address to,
+        uint256 tokenID_,
+        uint256 amount
+    ) external onlyAdmin {
+        address tokenAddress = permissionedTokens[tokenID_];
+        if(tokenAddress == address(0)) {
+            revert BuyGENZ__ZeroAddressError();
+        }
+        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
+        token.safeIncreaseAllowance(to, amount);
+        token.safeTransfer(to, amount);
+        emit FundsTransferred(to, amount);
     }
 
     /// @dev this function aims to update token base sale price
     /// @param updatedTokenPrice: updated GENZ ERC20 token base sale price
     function updateBaseSalePrice(uint256 updatedTokenPrice) external onlyAdmin {
-        _baseSalePrice = updatedTokenPrice;
-        _basePriceWithDec = updatedTokenPrice * 1e18;
+        basePriceWithDec = updatedTokenPrice;
         emit UpdatedBaseSalePrice(updatedTokenPrice);
     }
 
     /// @dev this function aims to update the minimum withdrawal period for token withdrawal from contract
     /// @param timeInMinutes: will be kept as 15 days.
-    /// [PRODUCTION TODO: _minWithdrawalPeriod = timeInDays * 1 days;]
+    /// [PRODUCTION TODO: minWithdrawalPeriod = timeInDays * 1 days;]
     function updateMinimumWithdrawalPeriod(uint256 timeInMinutes) external onlyAdmin {
-        _minWithdrawalPeriod = timeInMinutes * 1 minutes;
+        minWithdrawalPeriod = timeInMinutes * 1 minutes;
         emit UpdatedMinimumWithdrawalPeriod(timeInMinutes);
+    }
+
+    /// @notice this function aims to update the sale cap
+    function updateSaleCap(uint256 updatedSaleCap) external onlyAdmin {
+        saleCap = updatedSaleCap;
+        emit UpdatedSaleCap(updatedSaleCap);
+    }
+
+    /// @notice this function facilitates adding new supported payment tokens for GENZ ERC20 token purchase
+    function addTokenAddress(address tokenAddress) external onlyAdmin {
+        ++tokenID;
+        permissionedTokens[tokenID] = tokenAddress;
+        emit NewTokenAdded(tokenID, tokenAddress);
+    }
+
+    /// @notice this function aims to update the bonus token period
+    function updateBonusTokenPeriod(uint256 timeInHours) external onlyAdmin {
+        bonusTokenPeriod = (timeInHours * 1 hours) + block.timestamp;
+        emit UpdatedBonusTokenPeriod(timeInHours);
+    }
+
+    /// @notice this function aims to update the bonus token percent, to be given during the bonus period.
+    function updateBonusTokenPercent(uint256 updatedPercent) external onlyAdmin {
+        bonusTokenPercent = updatedPercent;
+        emit UpdatedBonusTokenPercent(updatedPercent);
     }
 
     /// @dev this function aims to pause the contracts' certain functions temporarily
@@ -122,39 +169,59 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
         _unpause();
     }
 
+    // :::::::::::::::::::::::: WRITING FUNCTIONS :::::::::::::::::::::::: //
+    
+    // :::::::::::::::::::::::: EXTERNAL FUNCTIONS ::::::::::::::::::::::: //
+    
     /// @dev this function faciliate users' to buy GENZ ERC20 token
-    /// @param value: amount of GENZ ERC20 tokens user wishes to purchase
-    /// @param deadline: DAI ERC20 token permit deadline
-    /// @param permitV: DAI ERC20 token permit signature (value v)
-    /// @param permitR: DAI ERC20 token permit signature (value r)
-    /// @param permitS: DAI ERC20 token permit signature (value s)
+    /// @param tokenID_: unique token ID for acceptable token address
+    /// @param amountInGENZ: amount of GENZ ERC20 tokens user wishes to purchase
+    /// @param deadline: ERC20 token permit deadline
+    /// @param permitV: ERC20 token permit signature (value v)
+    /// @param permitR: ERC20 token permit signature (value r)
+    /// @param permitS: ERC20 token permit signature (value s)
     function buyGENZToken(
-        uint256 value,
+        uint256 tokenID_,
+        uint256 amountInGENZ,
         uint256 deadline, 
         uint8 permitV,
         bytes32 permitR,
         bytes32 permitS
-    ) external override nonReentrant ifNotPaused returns(bool) {
-        if (value < 1e18) {
-            revert BuySellGENZ__LowAmountError();
+    ) external override nonReentrant returns(bool) {
+        ifNotPaused();
+        if (amountInGENZ < 1e21) {
+            revert BuyGENZ__LessThanMinimumAmountError();
         }
-        _minWithdrawalPeriod += WITHDRAWAL_PERIOD_MULTIPLIER;
-        (/* uint256 amountPerToken */, uint256 amountToBePaid) = calculatePriceGENZ(
-            _tokenCounter, _tokenCounter + value);
-        if (amountToBePaid > _tokenDAI.balanceOf(_msgSender())) {
+        address tokenAddress = permissionedTokens[tokenID_];
+        if(tokenAddress == address(0)) {
+            revert BuyGENZ__ZeroAddressError();
+        }
+        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
+        IERC20PermitUpgradeable tokenWithPermit = IERC20PermitUpgradeable(tokenAddress);
+        uint256 amountToBePaid = basePriceWithDec * amountInGENZ;
+        if (amountToBePaid > token.balanceOf(_msgSender())) {
             revert BuySellGENZ__InsufficientBalanceError();
         }
-        UserInformation storage userStakeInformation = usersInformation[_msgSender()];
-        userStakeInformation.amount += value;
-        userStakeInformation.hasBought = true;
-        userStakeInformation.minWithdrawTime = block.timestamp + _minWithdrawalPeriod;
-        _tokenPermitDAI.safePermit(_msgSender(), address(this), amountToBePaid, deadline, permitV, permitR, permitS);
-        _tokenDAI.safeTransferFrom(_msgSender(), address(this), amountToBePaid);
+        if (block.timestamp < bonusTokenPeriod) {
+            // bonusTokens = (bonusTokenPercent * totalSupply) / 100 ;
+            // userShare = (amountInGENZ / saleCap) * 100;
+            amountInGENZ += (amountInGENZ * bonusTokenPercent * totalSupply / saleCap);
+        }
+        tokenCounter += amountInGENZ;
+        minWithdrawalPeriod += WITHDRAWAL_PERIOD_MULTIPLIER;
+        UserInformation storage userInformation = usersInformation[_msgSender()];
+        userInformation.hasBought = true;
+        userInformation.amount += amountInGENZ;
+        userInformation.minWithdrawTime = block.timestamp + minWithdrawalPeriod;
+        tokenWithPermit.safePermit(_msgSender(), address(this), amountToBePaid, deadline, permitV, permitR, permitS);
+        token.safeTransferFrom(_msgSender(), address(this), amountToBePaid);
+        emit BoughtGENZ(_msgSender(), amountInGENZ);
         return true;
     }
 
     /// @dev this function aims to faciliate users' GENZ token withdrawal to their respcective wallets
-    function withdrawTokens() external {
+    function withdrawTokens() external override nonReentrant returns(bool) {
+        ifNotPaused();
         if (!usersInformation[_msgSender()].hasBought) {
             revert BuyGENZ__ZeroTokensPurchasedError();
         }
@@ -164,42 +231,20 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
         uint256 amountStaked = usersInformation[_msgSender()].amount;
         usersInformation[_msgSender()].hasBought = false;
         usersInformation[_msgSender()].amount = 0;
-        _tokenGENZ.safeTransfer(_msgSender(), amountStaked);
+        tokenGENZ.safeTransfer(_msgSender(), amountStaked);
+        emit WithdrawnGENZ(_msgSender(), amountStaked);
+        return true;
     }
 
+    // :::::::::::::::::::::::: READING FUNCTIONS :::::::::::::::::::::::: //
+    
+    // ::::::::::::::::::: PUBLIC PURE/VIEW FUNCTIONS :::::::::::::::::::: //
 
-    // ::::::::::::::::::::::::: VIEW FUNCTIONS ::::::::::::::::::::::::: //
-
-    /// @dev this function aims to calculate the current GENZ ERC20 token price
-    /// @param issuedTokensGENZ: total number of GENZ ERC20 token issued to date
-    /// @param requiredTokens: issuedTokensGENZ + amount of GENZ ERC20 user wishes to purchase
-    function calculatePriceGENZ(
-        uint256 issuedTokensGENZ, 
-        uint256 requiredTokens
-    ) public view override returns(uint256, uint256) {
-        uint256 commonRatioGENZ = _commonRatio * _baseSalePrice;
-        uint256 tokenDifference = (issuedTokensGENZ + (requiredTokens - 1e18));
-        uint256 averageDiff = ((commonRatioGENZ * tokenDifference) / 2) / 1e18;
-        uint256 amountPerToken = _basePriceWithDec + averageDiff;
-        uint256 amountToBePaid = (amountPerToken * (requiredTokens - issuedTokensGENZ))/1e18;
-        return (amountPerToken, amountToBePaid);
-    }
-
-    /// @dev this function aims to returns the token in circulation
-    function getGENZTokenCount() public view override returns(uint256) {
-        return _tokenCounter;
-    }
-
-    /// @dev this function aims to get the current GENZ ERC20 token price with decimals
-    function getBasePriceWithDec() external view override returns(uint256) {
-        return _basePriceWithDec;
-    }
-
-    /// @dev this function aims to get the current GENZ ERC20 token price
-    function getCurrentTokenPrice() public view override returns(uint256) {
-        (uint256 amountPerToken, /*uint256 amountToBePaid*/) = calculatePriceGENZ(
-            _tokenCounter, _tokenCounter + 1e18);
-        return amountPerToken;
+    /// @dev this function checks if the contracts' certain function calls has to be paused temporarily
+    function ifNotPaused() public view {
+        if((paused()) || (globalPauseOperation.isPaused())) {
+            revert BuyGENZ__OperationPaused();
+        } 
     }
 
     // :::::::::::::::::::::::: END OF CONTRACT :::::::::::::::::::::::: //    

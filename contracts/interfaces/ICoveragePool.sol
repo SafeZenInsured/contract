@@ -3,6 +3,7 @@ pragma solidity 0.8.16;
 
 interface ICoveragePool {
 
+    error CoveragePool__ZeroAddressInputError();
     error CoveragePool__ImmutableChangesError();
     error CoveragePool__TransactionFailedError();
     error CoveragePool__NotAMinimumPoolAmountError();
@@ -42,6 +43,7 @@ interface ICoveragePool {
     ) external returns(bool);
 
     function withdraw(
+        uint256 tokenID,
         uint256 value, 
         uint256 categoryID, 
         uint256 subCategoryID,
@@ -51,24 +53,7 @@ interface ICoveragePool {
         bytes32 s
     ) external returns(bool);
 
-    function getUnderwriteSZTBalance(
-        address userAddress
-    ) external view returns(uint256);
+    function permissionedTokens(uint256 tokenID) external view returns(address);
 
-    function getUnderwriterActiveVersionID(
-        uint256 categoryID, 
-        uint256 subCategoryID
-    ) external view returns(uint256[] memory);
-
-    function getUnderWriterDepositedBalance(
-        uint256 categoryID, 
-        uint256 subCategoryID, 
-        uint256 version
-    ) external view returns(uint256);
-
-    function getUnderWriterWithdrawnBalance(
-        uint256 categoryID, 
-        uint256 subCategoryID, 
-        uint256 version
-    ) external view returns(uint256);
+    function userPoolBalanceSZT(address addressUser) external view returns(uint256);
 }

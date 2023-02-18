@@ -16,32 +16,37 @@ import "./../../BaseUpgradeablePausable.sol";
 
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
+/// [PRODUCTION TODO: Start CategoryID from 1, and not 0]
 contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
-    /// _initVersion: counter to initialize the init one-time function, max value can be 1.
-    /// _categoryID: insurance category, e.g., stablecoin depeg insurance.
+
+    // :::::::::::::: STATE VARIABLES AND DECLARATIONS :::::::::::::::: //
+
+    /// initVersion: counter to initialize the init one-time function, max value can be 1.
+    /// categoryID: insurance category, e.g., stablecoin depeg insurance.
     /// PLATFORM_COST: platform fee on the profit earned
-    /// _addressCFA:address of the Constant Flow Agreement contract interface
-    uint256 private _initVersion;
-    uint256 private _categoryID;
+    /// addressCFA: address of the Constant Flow Agreement contract interface
+    uint256 private initVersion;
+    uint256 private categoryID;
     uint256 private constant PLATFORM_COST = 90;
-    address private _addressCFA;
+    address private addressCFA;
 
-    
-    /// _tokenDAI: DAI ERC20 token interface
-    /// _tokenSZT: SZT ERC20 token interface
-    /// _buySellSZT:Buy Sell SZT contract interface
-    /// _coveragePool: Coverage Pool contract interface
-    IERC20 private _tokenDAI;
-    IERC20 private _tokenSZT;
-    IBuySellSZT private _buySellSZT;
-    ICoveragePool private _coveragePool;
-    IClaimGovernance private _claimGovernance;
+    /// tokenDAI: DAI ERC20 token interface
+    /// tokenSZT: SZT ERC20 token interface
+    /// buySellSZT:Buy Sell SZT contract interface
+    /// coveragePool: Coverage Pool contract interface
+    IERC20 private tokenDAI;
+    IERC20 private tokenSZT;
+    IBuySellSZT private buySellSZT;
+    ICoveragePool private coveragePool;
+    IClaimGovernance private claimGovernance;
 
-    /// @dev collects info about the insurance subcategories, e.g., USDC depeg coverage, DAI depeg coverage.
+    /// @notice collects info about the insurance subcategories, e.g., USDC depeg coverage, DAI depeg coverage.
     /// isActive: checks whether insurance given subcategory is active or not.
     /// subCategoryName: insurance subcategory title
     /// info: insurance subcategory info, e.g., algorithmic stablecoin, etc.
+    /// logo: insurance subcategory logo, if available
     /// liquidity: insurance maximum coverage amount that can be offered
+    /// subCategoryID: subcategory ID
     /// streamFlowRate: insurance premium rate per second
     /// coverageOffered: insurance coverage amount already offered
     struct SubCategoryInfo {
@@ -62,15 +67,18 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     /// riskPoolStreamRate: risk pool stream rate during the specific epoch
     /// liquidation: liquidation, if happened, in the specific epoch
     struct RiskPoolEpochInfo {
-        uint256 startTime; // at the start
-        uint256 endTime;  // at the end
-        uint256 riskPoolLiquidity; // at the start
-        uint256 riskPoolStreamRate; // at the start
-        uint256 liquidation; // if needed
+        uint256 startTime;
+        uint256 endTime;
+        uint256 riskPoolLiquidity; 
+        uint256 riskPoolStreamRate; 
+        uint256 liquidation;
     }
 
     /// Maps :: categoryID(uint256) => epoch(uint256)
     mapping(uint256 => uint256) public epoch;
+
+    /// Maps :: categoryID(uint256) => categoryName(string)
+    mapping(uint256 => string) public category;
 
     /// Maps :: categoryID(uint256) => subCategoryID(uint256)
     mapping(uint256 => uint256) public subCategoryID;
@@ -88,45 +96,45 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
 
     /// @notice function access restricted to the Constant Flow Agreement contract address calls only
     modifier onlyCFA() {
-        require(_msgSender() == _addressCFA);
+        require(_msgSender() == addressCFA);
         _;
     }
 
     /// @notice function access restricted to the Claim Governance contract address calls only
     modifier onlyClaimGovernance() {
-        require(_msgSender() == address(_claimGovernance));
+        require(_msgSender() == address(claimGovernance));
         _;
     }
 
     /// @notice function access restricted to the Coverage Pool contract address calls only
     modifier onlyCoveragePool() {
-        require(_msgSender() == address(_coveragePool));
+        require(_msgSender() == address(coveragePool));
         _;
     }
 
     function initialize(
-        address buySellSZTCA,
-        address tokenAddressDAI,
-        address tokenAddressSZT
+        address addressBuySellSZT,
+        address addressDAI,
+        address addressSZT
     ) external initializer {
-        _buySellSZT = IBuySellSZT(buySellSZTCA);
-        _tokenDAI = IERC20(tokenAddressDAI);
-        _tokenSZT = IERC20(tokenAddressSZT);
+        buySellSZT = IBuySellSZT(addressBuySellSZT);
+        tokenDAI = IERC20(addressDAI);
+        tokenSZT = IERC20(addressSZT);
         __BaseUpgradeablePausable_init(_msgSender());
     }
 
     function init(
-        address CFA,
-        address coveragePoolAddress,
+        address addressCFA_,
+        address addressCoveragePool,
         address addressClaimGovernance
     ) external onlyAdmin {
-        if (_initVersion > 0) {
+        if (initVersion > 0) {
             revert InsuranceRegistry__ImmutableChangesError();
         }
-        ++_initVersion;
-        _addressCFA = CFA;
-        _coveragePool = ICoveragePool(coveragePoolAddress);
-        _claimGovernance = IClaimGovernance(addressClaimGovernance);
+        ++initVersion;
+        addressCFA = addressCFA_;
+        coveragePool = ICoveragePool(addressCoveragePool);
+        claimGovernance = IClaimGovernance(addressClaimGovernance);
     }
 
     function pause() external onlyAdmin {
@@ -138,163 +146,163 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     }
 
     function addInsuranceProduct() external onlyAdmin {
-        ++_categoryID;
+        ++categoryID;
     }
 
     function addInsuranceCategory(
-        uint256 categoryID,
+        uint256 categoryID_,
         string memory subCategoryName,
         string memory info,
         string memory logo,
         uint256 riskPoolCategory,
         uint256 streamFlowRate
         ) external onlyAdmin {
-        ++subCategoryID[categoryID];
-        uint256 subCategoryID_ = subCategoryID[categoryID];
-        SubCategoryInfo storage subCategoryInfo = subCategoriesInfo[categoryID][subCategoryID_];
+        ++subCategoryID[categoryID_];
+        uint256 subCategoryID_ = subCategoryID[categoryID_];
+        SubCategoryInfo storage subCategoryInfo = subCategoriesInfo[categoryID_][subCategoryID_];
         subCategoryInfo.isActive = true;
         subCategoryInfo.subCategoryName = subCategoryName;
         subCategoryInfo.info = info;
         subCategoryInfo.logo = logo;
         subCategoryInfo.liquidity = 0;
-        subCategoryInfo.subCategoryID = subCategoryID[categoryID];
+        subCategoryInfo.subCategoryID = subCategoryID[categoryID_];
         subCategoryInfo.coverageOffered = 0;
         subCategoryInfo.streamFlowRate = streamFlowRate;
-        uint256 versionID = epoch[categoryID];
-        epochRiskPoolCategory[categoryID][subCategoryID_][versionID] = riskPoolCategory;
+        uint256 versionID = epoch[categoryID_];
+        epochRiskPoolCategory[categoryID_][subCategoryID_][versionID] = riskPoolCategory;
     }
 
     function updateProtocolRiskPoolCategory(
-        uint256 categoryID, 
+        uint256 categoryID_, 
         uint256 subCategoryID_, 
         uint256 riskPoolCategory
     ) external onlyAdmin {
-        (/*uint256 oldRiskPoolCategory*/, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID, subCategoryID_);
-        _afterUpdateVersionInformation(categoryID, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, previousLiquiditySupplied);
+        (/*uint256 oldRiskPoolCategory*/, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
+        _afterUpdateVersionInformation(categoryID_, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, previousLiquiditySupplied);
     }
 
     function liquidatePositions(
-        uint256 categoryID,
+        uint256 categoryID_,
         uint256 subCategoryID_,
         uint256 liquidatedPercent,
         uint256 coverageAmount
     ) external onlyAdmin {
-        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID, subCategoryID_);
-        ++epoch[categoryID];
-        uint256 newVersionID = epoch[categoryID];
-        RiskPoolEpochInfo storage newRiskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][newVersionID];
+        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
+        ++epoch[categoryID_];
+        uint256 newVersionID = epoch[categoryID_];
+        RiskPoolEpochInfo storage newRiskPool = versionableRiskPoolsInfo[categoryID_][riskPoolCategory][newVersionID];
         newRiskPool.startTime = block.timestamp;
         newRiskPool.liquidation = 100 - liquidatedPercent;
         newRiskPool.riskPoolLiquidity = ((previousLiquiditySupplied * (100 - liquidatedPercent)) / 100);
         newRiskPool.riskPoolStreamRate = previousIncomingFlowRate;
-        for(uint i = 1; i <= subCategoryID[categoryID];) {
+        for(uint i = 1; i <= subCategoryID[categoryID_];) {
             if (
-                (epochRiskPoolCategory[categoryID][i][newVersionID - 1] == riskPoolCategory) &&
-                (subCategoriesInfo[categoryID][i].isActive)
+                (epochRiskPoolCategory[categoryID_][i][newVersionID - 1] == riskPoolCategory) &&
+                (subCategoriesInfo[categoryID_][i].isActive)
             ) {
-                epochRiskPoolCategory[categoryID][i][newVersionID] = riskPoolCategory;
-                subCategoriesInfo[categoryID][i].liquidity = ((subCategoriesInfo[categoryID][i].liquidity * (100 - liquidatedPercent)) / 100);
+                epochRiskPoolCategory[categoryID_][i][newVersionID] = riskPoolCategory;
+                subCategoriesInfo[categoryID_][i].liquidity = ((subCategoriesInfo[categoryID_][i].liquidity * (100 - liquidatedPercent)) / 100);
             }
             ++i;
         }
-        subCategoriesInfo[categoryID][subCategoryID_].coverageOffered -= coverageAmount;
+        subCategoriesInfo[categoryID_][subCategoryID_].coverageOffered -= coverageAmount;
     }
 
     function updateStreamFlowRate(
-        uint256 categoryID, 
+        uint256 categoryID_, 
         uint256 subCategoryID_, 
         uint256 newFlowRate
     ) external onlyAdmin {
-        subCategoriesInfo[categoryID][subCategoryID_].streamFlowRate = newFlowRate;
+        subCategoriesInfo[categoryID_][subCategoryID_].streamFlowRate = newFlowRate;
     }
 
     // coverage provided
     function addInsuranceLiquidity(
-        uint256 categoryID,
+        uint256 categoryID_,
         uint256 subCategoryID_,
         uint256 liquiditySupplied
     ) external override onlyCoveragePool returns(bool) {
-        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID, subCategoryID_);
-        _afterUpdateVersionInformation(categoryID, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, (previousLiquiditySupplied + liquiditySupplied));
-        subCategoriesInfo[categoryID][subCategoryID_].liquidity += liquiditySupplied;
+        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
+        _afterUpdateVersionInformation(categoryID_, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, (previousLiquiditySupplied + liquiditySupplied));
+        subCategoriesInfo[categoryID_][subCategoryID_].liquidity += liquiditySupplied;
         return true;
     }
 
     // coverage taken out
     function removeInsuranceLiquidity(
-        uint256 categoryID,
+        uint256 categoryID_,
         uint256 subCategoryID_, 
         uint256 liquiditySupplied
     ) external override onlyCoveragePool returns(bool) {
-        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID, subCategoryID_);
-        uint256 SZTTokenCounter = _buySellSZT.getTokenCounter();
-        (, uint256 amountCoveredInDAI) = _buySellSZT.calculatePriceSZT((SZTTokenCounter - liquiditySupplied), SZTTokenCounter);
-        _afterUpdateVersionInformation(categoryID, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, (previousLiquiditySupplied - amountCoveredInDAI));
-        subCategoriesInfo[categoryID][subCategoryID_].liquidity -= amountCoveredInDAI; 
+        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
+        uint256 SZTTokenCounter = buySellSZT.tokenCounter();
+        (, uint256 amountCoveredInDAI) = buySellSZT.calculatePriceSZT((SZTTokenCounter - liquiditySupplied), SZTTokenCounter);
+        _afterUpdateVersionInformation(categoryID_, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, (previousLiquiditySupplied - amountCoveredInDAI));
+        subCategoriesInfo[categoryID_][subCategoryID_].liquidity -= amountCoveredInDAI; 
         return true;
     }
 
     // purchase insurance
     function addCoverageOffered(
-        uint256 categoryID,
+        uint256 categoryID_,
         uint256 subCategoryID_, 
         uint256 coverageAmount,
         uint256 incomingFlowRate
     ) external onlyCFA returns(bool) {
-        if (!ifEnoughLiquidity(categoryID, coverageAmount, subCategoryID_)) {
+        if (!ifEnoughLiquidity(categoryID_, coverageAmount, subCategoryID_)) {
             revert InsuranceRegistry__NotEnoughLiquidityError();
         }
-        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID, subCategoryID_);
-        _afterUpdateVersionInformation(categoryID, subCategoryID_, riskPoolCategory, (previousIncomingFlowRate + incomingFlowRate), previousLiquiditySupplied);
-        subCategoriesInfo[categoryID][subCategoryID_].coverageOffered += coverageAmount;
+        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
+        _afterUpdateVersionInformation(categoryID_, subCategoryID_, riskPoolCategory, (previousIncomingFlowRate + incomingFlowRate), previousLiquiditySupplied);
+        subCategoriesInfo[categoryID_][subCategoryID_].coverageOffered += coverageAmount;
         return true;       
     }
 
     // insurance completed
     function removeCoverageOffered(
-        uint256 categoryID,
+        uint256 categoryID_,
         uint256 subCategoryID_, 
         uint256 coverageAmount, 
         uint256 incomingFlowRate
     ) external onlyCFA returns(bool) {
-        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID, subCategoryID_);
-        _afterUpdateVersionInformation(categoryID, subCategoryID_, riskPoolCategory, (previousIncomingFlowRate - incomingFlowRate), previousLiquiditySupplied);
-        subCategoriesInfo[categoryID][subCategoryID_].coverageOffered -= coverageAmount; 
+        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
+        _afterUpdateVersionInformation(categoryID_, subCategoryID_, riskPoolCategory, (previousIncomingFlowRate - incomingFlowRate), previousLiquiditySupplied);
+        subCategoriesInfo[categoryID_][subCategoryID_].coverageOffered -= coverageAmount; 
         return true;  
     }
 
     function claimAdded(
-        uint256 categoryID, 
+        uint256 categoryID_, 
         uint256 subCategoryID_
     ) external override onlyClaimGovernance returns(bool) {
-        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID, subCategoryID_);
-        _afterUpdateVersionInformation(categoryID, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, previousLiquiditySupplied);
+        (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
+        _afterUpdateVersionInformation(categoryID_, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, previousLiquiditySupplied);
         return true;
     }
     
     function calculateUnderwriterBalance(
-        uint256 categoryID,
+        uint256 categoryID_,
         uint256 subCategoryID_
     ) external view returns(uint256) {
         uint256 userBalance = 0;
-        uint256[] memory activeVersionID = _coveragePool.getUnderwriterActiveVersionID(categoryID, subCategoryID_);
+        uint256[] memory activeVersionID = coveragePool.getUnderwriterActiveVersionID(categoryID_, subCategoryID_);
         uint256 startVersionID = activeVersionID[0];
         uint256 premiumEarnedFlowRate = 0;
         uint256 userPremiumEarned = 0;
-        uint256 riskPoolCategory = epochRiskPoolCategory[categoryID][subCategoryID_][startVersionID];
+        uint256 riskPoolCategory = epochRiskPoolCategory[categoryID_][subCategoryID_][startVersionID];
         uint256 counter = 0;
         for(uint256 i = startVersionID; i <= epoch[subCategoryID_];) {
             if(activeVersionID[counter] == i) {
-                if (_coveragePool.getUnderWriterDepositedBalance(categoryID, subCategoryID_, i) > 0) {
-                    userBalance += _coveragePool.getUnderWriterDepositedBalance(categoryID, subCategoryID_, i);
+                if (coveragePool.getUnderWriterDepositedBalance(categoryID_, subCategoryID_, i) > 0) {
+                    userBalance += coveragePool.getUnderWriterDepositedBalance(categoryID_, subCategoryID_, i);
                 }
                 else {
-                    userBalance -= _coveragePool.getUnderWriterWithdrawnBalance(categoryID, subCategoryID_, i);
+                    userBalance -= coveragePool.getUnderWriterWithdrawnBalance(categoryID_, subCategoryID_, i);
                 }
                 ++counter;
             }
-            riskPoolCategory = epochRiskPoolCategory[categoryID][subCategoryID_][i];
-            RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][i];
+            riskPoolCategory = epochRiskPoolCategory[categoryID_][subCategoryID_][i];
+            RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID_][riskPoolCategory][i];
             userBalance = (userBalance * riskPool.liquidation) / 100;
             premiumEarnedFlowRate = riskPool.riskPoolStreamRate;            
             uint256 duration = riskPool.endTime - riskPool.startTime;
@@ -306,12 +314,12 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     }
 
     function _beforeUpdateVersionInformation(
-        uint256 categoryID, 
+        uint256 categoryID_, 
         uint256 subCategoryID_
     ) internal returns(uint256, uint256, uint256) {
-        uint256 versionID = epoch[categoryID];
-        uint256 riskPoolCategory = epochRiskPoolCategory[categoryID][subCategoryID_][versionID];
-        RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][versionID];
+        uint256 versionID = epoch[categoryID_];
+        uint256 riskPoolCategory = epochRiskPoolCategory[categoryID_][subCategoryID_][versionID];
+        RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID_][riskPoolCategory][versionID];
         riskPool.endTime = block.timestamp;
         uint256 previousIncomingFlowRate = riskPool.riskPoolStreamRate;
         uint256 previousLiquiditySupplied = riskPool.riskPoolLiquidity;
@@ -319,30 +327,30 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     }
 
     function _afterUpdateVersionInformation(
-        uint256 categoryID, 
+        uint256 categoryID_, 
         uint256 subCategoryID_, 
         uint256 riskPoolCategory,
         uint256 previousIncomingFlowRate, 
         uint256 previousLiquiditySupplied
     ) internal {
-        ++epoch[categoryID];
-        uint256 versionID = epoch[categoryID];
-        RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID][riskPoolCategory][versionID];
+        ++epoch[categoryID_];
+        uint256 versionID = epoch[categoryID_];
+        RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID_][riskPoolCategory][versionID];
         riskPool.startTime = block.timestamp;
         riskPool.riskPoolLiquidity = previousLiquiditySupplied;
         riskPool.riskPoolStreamRate = previousIncomingFlowRate;
-        epochRiskPoolCategory[categoryID][subCategoryID_][versionID] = riskPoolCategory;
+        epochRiskPoolCategory[categoryID_][subCategoryID_][versionID] = riskPoolCategory;
     }
 
-    function getVersionID(uint256 categoryID) external view returns(uint256) {
-        return epoch[categoryID];
+    function getVersionID(uint256 categoryID_) external view returns(uint256) {
+        return epoch[categoryID_];
     }   
 
     function getInsuranceInfo(
-        uint256 categoryID, 
+        uint256 categoryID_, 
         uint256 subCategoryID_
     ) external view returns(bool, string memory, string memory, string memory, uint256, uint256, uint256) {
-        SubCategoryInfo storage insuranceInfo = subCategoriesInfo[categoryID][subCategoryID_];
+        SubCategoryInfo storage insuranceInfo = subCategoriesInfo[categoryID_][subCategoryID_];
         return (insuranceInfo.isActive, 
                 insuranceInfo.subCategoryName, 
                 insuranceInfo.info,
@@ -353,37 +361,37 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         );
     }
 
-    function getProtocolRiskCategory(uint256 categoryID, uint256 subCategoryID_, uint256 version_) external view returns (uint256) {
-        return epochRiskPoolCategory[categoryID][subCategoryID_][version_];
+    function getProtocolRiskCategory(uint256 categoryID_, uint256 subCategoryID_, uint256 version_) external view returns (uint256) {
+        return epochRiskPoolCategory[categoryID_][subCategoryID_][version_];
     }
 
-    function getStreamFlowRate(uint256 categoryID, uint256 subCategoryID_) external view returns(uint256) {
-        return subCategoriesInfo[categoryID][subCategoryID_].streamFlowRate;
+    function getStreamFlowRate(uint256 categoryID_, uint256 subCategoryID_) external view returns(uint256) {
+        return subCategoriesInfo[categoryID_][subCategoryID_].streamFlowRate;
     }
 
     
-    function ifEnoughLiquidity(uint256 categoryID, uint256 insuredAmount, uint256 subCategoryID_) public view returns(bool) {
-        bool isTrue=  subCategoriesInfo[categoryID][subCategoryID_].liquidity >= (subCategoriesInfo[categoryID][subCategoryID_].coverageOffered + insuredAmount);
+    function ifEnoughLiquidity(uint256 categoryID_, uint256 insuredAmount, uint256 subCategoryID_) public view returns(bool) {
+        bool isTrue=  subCategoriesInfo[categoryID_][subCategoryID_].liquidity >= (subCategoriesInfo[categoryID_][subCategoryID_].coverageOffered + insuredAmount);
         return isTrue;
     }
 
-    function getPoolExpectedPremium(uint256 categoryID, uint256 riskPoolCategory, uint256 version_) external view returns(uint256) {
-        return versionableRiskPoolsInfo[categoryID][riskPoolCategory][version_].riskPoolStreamRate;
+    function getPoolExpectedPremium(uint256 categoryID_, uint256 riskPoolCategory, uint256 version_) external view returns(uint256) {
+        return versionableRiskPoolsInfo[categoryID_][riskPoolCategory][version_].riskPoolStreamRate;
     }
 
-    function getPoolLiquidity(uint256 categoryID, uint256 riskPoolCategory, uint256 version_) external view returns (uint256) {
-        return versionableRiskPoolsInfo[categoryID][riskPoolCategory][version_].riskPoolLiquidity;
+    function getPoolLiquidity(uint256 categoryID_, uint256 riskPoolCategory, uint256 version_) external view returns (uint256) {
+        return versionableRiskPoolsInfo[categoryID_][riskPoolCategory][version_].riskPoolLiquidity;
     }
 
-    function getPoolLiquidationPercent(uint256 categoryID, uint256 riskPoolCategory, uint256 version_) public view returns(uint256) {
-        return versionableRiskPoolsInfo[categoryID][riskPoolCategory][version_].liquidation;
+    function getPoolLiquidationPercent(uint256 categoryID_, uint256 riskPoolCategory, uint256 version_) public view returns(uint256) {
+        return versionableRiskPoolsInfo[categoryID_][riskPoolCategory][version_].liquidation;
     }
 
     function getLatestCategoryID() external view returns(uint256) {
-        return _categoryID;
+        return categoryID;
     }
     
-    function getLatestSubCategoryID(uint256 categoryID) external view returns(uint256) {
-        return subCategoryID[categoryID];
+    function getLatestSubCategoryID(uint256 categoryID_) external view returns(uint256) {
+        return subCategoryID[categoryID_];
     }
 }

@@ -18,25 +18,30 @@ import "./../../BaseUpgradeablePausable.sol";
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
 contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
-    /// _initVersion: counter to initialize the init one-time function, max value can be 1.
-    /// _waitingTime: staked token withdrawal waiting time
-    /// totalTokensStaked: total amount of SZT tokens staked to underwrite insurance
-    uint256 private _initVersion;
-    uint256 private _waitingTime;
-    uint256 private _minCoveragePoolAmount;
-    uint256 public override totalTokensStaked;
-
+    
+    // ::::::::::::::::: STATE VARIABLES AND DECLARATIONS :::::::::::::::: //
+    
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
-    /// _tokenSZT: SZT ERC20 token
+    /// initVersion: counter to initialize the init one-time function, max value can be 1.
+    /// waitingTime: staked token withdrawal waiting time
+    /// totalTokensStaked: total amount of SZT tokens staked to underwrite insurance
+    uint256 public tokenID;
+    uint256 public initVersion;
+    uint256 public waitingTime;
+    uint256 public minCoveragePoolAmount;
+    uint256 public override totalTokensStaked;
+
+    
+    /// tokenSZT: SZT ERC20 token
     /// _buySellContract: Buy Sell SZT Contract
-    /// _insuranceRegistry: Insurance Registry Contract
-    IERC20Upgradeable private immutable _tokenSZT;
-    IERC20Upgradeable private immutable _tokenDAI;
-    IERC20PermitUpgradeable private immutable _tokenPermitDAI;
-    IBuySellSZT private immutable _buySellSZT;
-    IInsuranceRegistry private _insuranceRegistry;
+    /// insuranceRegistry: Insurance Registry Contract
+    IERC20Upgradeable public immutable tokenSZT;
+    IERC20Upgradeable public immutable tokenDAI;
+    IERC20PermitUpgradeable public immutable tokenPermitDAI;
+    IBuySellSZT public immutable buySellSZT;
+    IInsuranceRegistry public insuranceRegistry;
 
     /// @dev collects underwriters' withdrawal request data
     /// @param ifTimerStarted: checks if the withdrawal waiting timer been activated by underwriter or not 
@@ -53,8 +58,9 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
     /// @param startVersionBlock: stores underwriters' first version block number
     struct UserInfo {
         bool isActiveInvested;
-        uint256 startVersionBlock;
         uint256 depositedAmount;
+        uint256 startVersionBlock;
+        uint256 previousUserEpoch;
     }
 
     /// @dev collects underwriters' account balance incl. deposits and withdrawals
@@ -65,9 +71,11 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         uint256 withdrawnAmount;
     }
 
+    mapping(uint256 => address) public override permissionedTokens;
+
     /// @dev mapping to store underwriters' global coverage offered portfolio
     /// maps userAddress => userPoolBalanceSZT
-    mapping (address => uint256) private userPoolBalanceSZT;
+    mapping (address => uint256) public override userPoolBalanceSZT;
 
     /// record the user info, i.e. if the user has invested in a particular protocol
     /// user address => categoryID => subCategoryID
@@ -78,23 +86,50 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
     // user address => categoryID => subCategoryID => version => underwriterinfo
     mapping(address => mapping(uint256 => mapping(uint256 => mapping(uint256 => BalanceInfo)))) private underwritersBalance;
 
-    constructor(address addressSZT, address addressBuySellSZT, address tokenDAI) {
-        _tokenSZT = IERC20Upgradeable(addressSZT);
-        _buySellSZT = IBuySellSZT(addressBuySellSZT);
-        _tokenDAI = IERC20Upgradeable(tokenDAI);
-        _tokenPermitDAI = IERC20PermitUpgradeable(tokenDAI);
+    // ::::::::::::::::::::::::::: CONSTRUCTOR ::::::::::::::::::::::::::: //
+
+    constructor(address addressSZT, address addressBuySellSZT, address addressDAI) {
+        tokenSZT = IERC20Upgradeable(addressSZT);
+        buySellSZT = IBuySellSZT(addressBuySellSZT);
+        tokenDAI = IERC20Upgradeable(addressDAI);
+        tokenPermitDAI = IERC20PermitUpgradeable(addressDAI);
     }
+
+    // ::::::::::::::::::::::::: ADMIN FUNCTIONS ::::::::::::::::::::::::: //
 
     /// @dev one-time function aims to initialize the contract
     /// @dev MUST revert if called more than once.
     /// @param insuranceRegAddress: address of the Insurance Registry contract
     function initialize(address insuranceRegAddress) external initializer {
-        _insuranceRegistry = IInsuranceRegistry(insuranceRegAddress);
-        _waitingTime = 20;
-        _minCoveragePoolAmount = 1e18;
+        insuranceRegistry = IInsuranceRegistry(insuranceRegAddress);
+        waitingTime = 20;
+        minCoveragePoolAmount = 1e18;
         totalTokensStaked = 0;
         __BaseUpgradeablePausable_init(_msgSender());
 
+    }
+
+    /// @dev this function aims to update the required minimum coverage amount for underwriters' deposits
+    /// @param valueInSZT: amount of SZT token
+    function updateMinCoveragePoolAmount(uint256 valueInSZT) external onlyAdmin {
+        minCoveragePoolAmount = valueInSZT;
+        emit UpdatedMinCoveragePoolAmount();
+    }
+
+    /// @dev this function aims to update the underwriters' withdrawal waiting delay
+    /// @param timeInDays: 3-4 days will be kept as default.
+    /// [PRODUCTION TODO: waitingTime = timeInDays * 1 days;]
+    function updateWaitingPeriodTime(uint256 timeInDays) external onlyAdmin {
+        waitingTime = timeInDays * 1 seconds;
+        emit UpdatedWaitingPeriod(timeInDays);
+    }
+
+    function addTokenAddress(address addressToken) external onlyAdmin {
+        if(addressToken == address(0)) {
+            revert CoveragePool__ZeroAddressInputError();
+        }
+        ++tokenID;
+        permissionedTokens[tokenID] = addressToken;
     }
 
     /// @notice to pause the certain functions within the contract
@@ -107,21 +142,10 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         _unpause();
     }
 
-    /// @dev this function aims to update the required minimum coverage amount for underwriters' deposits
-    /// @param valueInSZT: amount of SZT token
-    function updateMinCoveragePoolAmount(uint256 valueInSZT) external onlyAdmin {
-        _minCoveragePoolAmount = valueInSZT;
-        emit UpdatedMinCoveragePoolAmount();
-    }
-
-    /// @dev this function aims to update the underwriters' withdrawal waiting delay
-    /// @param timeInDays: 3-4 days will be kept as default.
-    /// [PRODUCTION TODO: _waitingTime = timeInDays * 1 days;]
-    function updateWaitingPeriodTime(uint256 timeInDays) external onlyAdmin {
-        _waitingTime = timeInDays * 1 seconds;
-        emit UpdatedWaitingPeriod(timeInDays);
-    }
-
+    // :::::::::::::::::::::::: WRITING FUNCTIONS :::::::::::::::::::::::: //
+    
+    // :::::::::::::::::::::::: EXTERNAL FUNCTIONS ::::::::::::::::::::::: //
+    
     /// @dev this function aims to add the coverage offered by the underwriters'
     /// @param amountInSZT: amount of SZT token
     /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
@@ -139,18 +163,21 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         bytes32 permitR, 
         bytes32 permitS
     ) public override nonReentrant returns(bool) {
-        if (amountInSZT < _minCoveragePoolAmount) {
+        if (amountInSZT < minCoveragePoolAmount) {
             revert CoveragePool__NotAMinimumPoolAmountError();
         }
-        uint256 _tokenCounter = _buySellSZT.getTokenCounter();
-        (/*uint256 amountPerToken*/, uint256 amountPaidInDAI) = _buySellSZT.calculatePriceSZT(
-            _tokenCounter, (_tokenCounter + amountInSZT)
+        uint256 tokenCounter = buySellSZT.tokenCounter();
+        (/*uint256 amountPerToken*/, uint256 amountPaidInDAI) = buySellSZT.calculatePriceSZT(
+            tokenCounter, (tokenCounter + amountInSZT)
         );
-        if (_tokenDAI.balanceOf(_msgSender()) < amountPaidInDAI) {
+        if (tokenDAI.balanceOf(_msgSender()) < amountPaidInDAI) {
             revert CoveragePool__LowAmountError();
         }
-        uint256 currVersion = _insuranceRegistry.getVersionID(categoryID) + 1;
-        underwritersBalance[_msgSender()][categoryID][subCategoryID][currVersion].depositedAmount += amountInSZT;
+        uint256 currVersion = insuranceRegistry.getVersionID(categoryID) + 1;
+        uint256 userPreviousEpoch = usersInfo[_msgSender()][categoryID][subCategoryID].previousUserEpoch;
+        underwritersBalance[_msgSender()][categoryID][subCategoryID][currVersion].depositedAmount = (
+            underwritersBalance[_msgSender()][categoryID][subCategoryID][userPreviousEpoch].depositedAmount + amountInSZT);
+        
         totalTokensStaked += amountInSZT;
         UserInfo storage userInfo = usersInfo[_msgSender()][categoryID][subCategoryID];
         if (!userInfo.isActiveInvested) {
@@ -159,10 +186,10 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         }
         userInfo.depositedAmount += amountInSZT;
         userPoolBalanceSZT[_msgSender()] += amountInSZT;
-        _insuranceRegistry.addInsuranceLiquidity(categoryID, subCategoryID, amountPaidInDAI);
-        _tokenPermitDAI.safePermit(_msgSender(), address(this), amountPaidInDAI, deadline, permitV, permitR, permitS);
-        _tokenDAI.safeTransferFrom(_msgSender(), address(_buySellSZT), amountPaidInDAI);
-        bool buySuccess = _buySellSZT.buySZTToken(_msgSender(), amountInSZT);
+        insuranceRegistry.addInsuranceLiquidity(categoryID, subCategoryID, amountPaidInDAI);
+        tokenPermitDAI.safePermit(_msgSender(), address(this), amountPaidInDAI, deadline, permitV, permitR, permitS);
+        tokenDAI.safeTransferFrom(_msgSender(), address(buySellSZT), amountPaidInDAI);
+        bool buySuccess = buySellSZT.buySZTToken(_msgSender(), amountInSZT);
         if (!buySuccess) {
             revert CoveragePool__TransactionFailedError();
         }
@@ -186,7 +213,7 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
             WithdrawWaitPeriod storage waitingTimeCountdown = checkWaitTime[_msgSender()][categoryID][subCategoryID];
             waitingTimeCountdown.ifTimerStarted = true;
             waitingTimeCountdown.tokenCountSZT = value;
-            waitingTimeCountdown.canWithdrawTime = _waitingTime + block.timestamp;
+            waitingTimeCountdown.canWithdrawTime = waitingTime + block.timestamp;
             return true;
         }
         return false;
@@ -201,6 +228,7 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
     /// @param permitR: GSZT ERC20 token permit signature (value r)
     /// @param permitS: GSZT ERC20 token permit signature (value s)
     function withdraw(
+        uint256 tokenID_,
         uint256 value, 
         uint256 categoryID, 
         uint256 subCategoryID,
@@ -209,7 +237,7 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         bytes32 permitR, 
         bytes32 permitS
     ) external override nonReentrant returns(bool) {
-        uint256 userBalance = _insuranceRegistry.calculateUnderwriterBalance(categoryID, subCategoryID);
+        uint256 userBalance = insuranceRegistry.calculateUnderwriterBalance(categoryID, subCategoryID);
         WithdrawWaitPeriod storage waitTime = checkWaitTime[_msgSender()][categoryID][subCategoryID];
         if (
             (userBalance < value) || 
@@ -218,7 +246,7 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         ) {
             revert CoveragePool__TransactionFailedError();
         }
-        uint256 currVersion = _insuranceRegistry.getVersionID(categoryID) + 1;
+        uint256 currVersion = insuranceRegistry.getVersionID(categoryID) + 1;
         underwritersBalance[_msgSender()][categoryID][subCategoryID][currVersion].withdrawnAmount += value;
         waitTime.tokenCountSZT -= value;
         if (waitTime.tokenCountSZT == value) {
@@ -227,9 +255,9 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         totalTokensStaked -= value;
         userPoolBalanceSZT[_msgSender()] -= value;
         usersInfo[_msgSender()][categoryID][subCategoryID].depositedAmount -= value;
-        bool removeSuccess = _insuranceRegistry.removeInsuranceLiquidity(subCategoryID, subCategoryID, value);
-        bool sellSuccess = _buySellSZT.sellSZTToken(_msgSender(), value, deadline, permitV, permitR, permitS);
-        _tokenSZT.safeTransfer(address(_buySellSZT), value);
+        bool removeSuccess = insuranceRegistry.removeInsuranceLiquidity(subCategoryID, subCategoryID, value);
+        bool sellSuccess = buySellSZT.sellSZTToken(_msgSender(), value, tokenID_, deadline, permitV, permitR, permitS);
+        tokenSZT.safeTransfer(address(buySellSZT), value);
         if (!removeSuccess || !sellSuccess) {
             revert CoveragePool__TransactionFailedError();
         }
@@ -243,10 +271,10 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
     function getUnderwriterActiveVersionID(
         uint256 categoryID, 
         uint256 subCategoryID
-    ) external view override returns(uint256[] memory) {
+    ) external view returns(uint256[] memory) {
         uint256 activeCount = 0;
         uint256 userStartVersion = usersInfo[_msgSender()][categoryID][subCategoryID].startVersionBlock;
-        uint256 currVersion =  _insuranceRegistry.getVersionID(categoryID);
+        uint256 currVersion =  insuranceRegistry.getVersionID(categoryID);
         for(uint256 i = userStartVersion; i <= currVersion;) {
             if (underwritersBalance[_msgSender()][categoryID][subCategoryID][i].depositedAmount > 0) {
                 ++activeCount;
@@ -273,45 +301,18 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
     }
 
     /// @notice this function returns user deposited amount for a particular epoch 
-    /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
-    /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
-    /// @param version: time interval between any new activity recorded
+    
     function getUnderWriterDepositedBalance(
-        uint256 categoryID, 
-        uint256 subCategoryID, 
-        uint256 version
-    ) external view override returns(uint256) {
-        return underwritersBalance[_msgSender()][categoryID][subCategoryID][version].depositedAmount;
-    }
+    ) external view {
+        }
 
     /// @notice this function returns user withdrawn amount for a particular epoch
-    /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
-    /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
-    /// @param version: time interval between any new activity recorded
     function getUnderWriterWithdrawnBalance(
-        uint256 categoryID, 
-        uint256 subCategoryID, 
-        uint256 version
-    ) external view override returns(uint256) {
-        return underwritersBalance[_msgSender()][categoryID][subCategoryID][version].withdrawnAmount;
+    ) external view {
     }
 
     /// @notice this function returns user deposited amount for a particular subcategory insurance
-    /// @param userAddress: user wallet address
-    /// @param categoryID: insurance category, e.g., stablecoin depeg insurance.
-    /// @param subCategoryID: insurance sub-category, e.g., USDC depeg coverage, DAI depeg coverage.
     function getUserCoveragePoolAmount(
-        address userAddress,
-        uint256 categoryID, 
-        uint256 subCategoryID
-    ) external view returns(uint256) {
-        return usersInfo[userAddress][categoryID][subCategoryID].depositedAmount;
-    }
-
-    /// @notice this function returns user globally deposited amount
-    /// @param userAddress: user wallet address
-    function getUnderwriteSZTBalance(address userAddress) external view override returns(uint256) {
-        // it doesn't take in factor how many tokens underwriter might have diluted if hack happened
-        return (userPoolBalanceSZT[userAddress] > 0 ? userPoolBalanceSZT[userAddress] : 0);
+    ) external view {
     }
 }

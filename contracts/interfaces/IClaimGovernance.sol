@@ -6,56 +6,90 @@ pragma solidity 0.8.16;
 
 interface IClaimGovernance {
 
-    /// Custom Error Codes
-    error Claim__VotingTimeEndedError();
-    error Claim__UserAlreadyVotedError();
-    error Claim__ImmutableChangesError();
-    error Claim__DecisionChallengedError();
-    error Claim__VotingNotYetStartedError();
-    error Claim__DecisionNotYetTakenError();
-    error Claim__PausedOperationFailedError();
-    error Claim__VotingDecisionNotYetFinalizedError();
-    error Claim__DecisionNoLongerCanBeChallengedError();
+    error ClaimGovernance__ZeroAddressError();
 
-    event NewClaimCreated(address indexed userAddress, uint256 indexed claimID, string indexed proof);
+    error ClaimGovernance__VotingTimeEndedError();
+
+    error ClaimGovernance__UserAlreadyVotedError();
+
+    error ClaimGovernance__DecisionChallengedError();
+
+    error ClaimGovernance__VotingNotYetStartedError();
+
+    error ClaimGovernance__PausedOperationFailedError();
+
+    error CoverageGovernance__InsufficientBalanceError();
+
+    error ClaimGovernance__VotingDecisionNotYetFinalizedError();
+
+    error ClaimGovernance__UnsuccessfulClaimRegistrationError();
+
+    error ClaimGovernance__DecisionNoLongerCanBeChallengedError();
+
+
+    /// @notice emits after the contract has been initialized
+    event InitializedContractClaimGovernance(address indexed addressUser);
+
+    event UpdatedVotingEndTime(uint256 indexed claimID, uint256 indexed timeInHours);
+
+    event AddedNewAdvisor(address indexed addressUser);
+
+    event UpdatedStakeAmount(uint256 indexed updatedStakeAmount);
+
+    event NewClaimCreated(
+        address indexed addressClaimant, 
+        uint256 indexed claimID, 
+        string indexed proof
+    );
+
+    /// @notice emits when the new token is added for GENZ ERC20 token purchase
+    event NewTokenAdded(uint256 indexed tokenID, address indexed tokenAddress);
+
+    event UserVoted(
+        uint256 indexed claimID,
+        address indexed addressUser,
+        bool indexed support,
+        uint256 votes
+    );
+
+    event ClaimDecisionResult(
+        uint256 claimID,
+        bool isAccepted
+    );
+
+    event ClaimChallenged(
+        address indexed addressClaimant, 
+        uint256 indexed claimID
+    );
 
     function createClaim(
+        uint256 tokenID_,
         uint256 categoryID,
-        uint256 subCategoryID, 
+        uint256 subcategoryID, 
         string memory proof, 
         uint256 requestedClaimAmount,
         uint256 deadline, 
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
-    ) external returns(bool); 
+        uint8 permitV,
+        bytes32 permitR, 
+        bytes32 permitS
+    ) external returns(bool);
 
     function vote(
-        uint256 claimID, 
+        uint256 claimID_, 
         bool support
     ) external returns(bool);
 
     function claimDecision(
-        uint256 claimID
+        uint256 tokenID_, 
+        uint256 claimID_
     ) external returns(bool);
 
     function challengeDecision(
-        uint256 claimID,
+        uint256 tokenID_,
+        uint256 claimID_,
         uint256 deadline, 
-        uint8 v, 
-        bytes32 r, 
-        bytes32 s
-    ) external;
-
-    function viewVoteReceipt(
-        uint256 claimID
-    ) external view returns(bool, bool, uint256);
-
-    function getClaimID() external view returns(uint256);
-
-    function getVotingInfo(
-        uint256 claimID
-    ) external view returns(
-        uint256, uint256, uint256, uint256, uint256, uint256, uint256
-    );
+        uint8 permitV, 
+        bytes32 permitR, 
+        bytes32 permitS
+    ) external returns(bool);
 }   
