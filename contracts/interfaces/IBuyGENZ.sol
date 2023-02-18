@@ -12,7 +12,7 @@ interface IBuyGENZ {
     error BuyGENZ__OperationPaused();
 
     /// @notice reverts when user input wrong token ID which leads to zero address
-    error BuyGENZ__ZeroAddressError();
+    error BuyGENZ__ZeroAddressInputError();
 
     /// @notice reverts when user input amount less than the minimum acceptable amount
     error BuyGENZ__LessThanMinimumAmountError();

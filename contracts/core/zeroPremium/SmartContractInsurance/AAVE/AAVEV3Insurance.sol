@@ -433,7 +433,8 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
     ) public view returns(uint256, uint256[] memory) {
         uint256 userBalance = 0;
         uint256 parentVersion = 0;
-        uint256 riskPoolCategory = 0;        
+        uint256 riskPoolCategory = 0;
+        uint256 liquidatedAmount = 0;        
         uint256 currVersion = childEpoch;
         uint256 userStartVersion = usersInfo[addressUser][aTokenAddress].startChildEpoch;
         
@@ -465,11 +466,16 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
                     riskPoolCategory = zpController.getProtocolRiskCategory(protocolID, parentVersion);
                 }
                 if (zpController.isRiskPoolLiquidated(parentVersion, riskPoolCategory)) {
-                    userBalance = ((userBalance * zpController.getLiquidationFactor(parentVersion)) / 100);
+                    liquidatedAmount += (
+                        userBalance - (
+                            (userBalance * zpController.getLiquidationFactor(parentVersion)) / 100
+                        )
+                    );
                 }
             }
             ++i; 
         }
+        userBalance -= liquidatedAmount;
         return (userBalance, userRewardTokensAmount);
     }
 

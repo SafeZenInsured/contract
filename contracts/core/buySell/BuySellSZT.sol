@@ -125,7 +125,7 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
     /// @notice this function faciliate users' to buy SZT ERC20 non-speculative token
     /// @param addressUser: user wallet address
     /// @param amountInSZT: amount of SZT tokens user wishes to purchase
-    function buySZTToken(
+    function buyTokenSZT(
         address addressUser,
         uint256 amountInSZT
     ) external override nonReentrant returns(bool) {
@@ -150,7 +150,7 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
     /// @param permitV: GSZT ERC20 token permit signature (value v)
     /// @param permitR: GSZT ERC20 token permit signature (value r)
     /// @param permitS: GSZT ERC20 token permit signature (value s)
-    function sellSZTToken(
+    function sellTokenSZT(
         address addressUser,
         uint256 amountInSZT,
         uint256 tokenID,
@@ -251,7 +251,7 @@ contract BuySellSZT is IBuySellSZT, BaseUpgradeablePausable {
     /// @param addressUser: user wallet address
     function _burnTokenGSZT(address addressUser) private view returns(uint256) {
         uint256 userBalanceSZT = tokenSZT.balanceOf(addressUser);
-        uint256 amountUnderwritten = coveragePool.getUnderwriteSZTBalance(addressUser);
+        uint256 amountUnderwritten = coveragePool.userPoolBalanceSZT(addressUser);
         uint256 expectedBalanceGSZT = _calculateTokenCountGSZT(userBalanceSZT + amountUnderwritten);
         uint256 currentBalanceGSZT = tokenGSZT.balanceOf(addressUser);
         uint256 amountToBeBurned = currentBalanceGSZT - expectedBalanceGSZT;

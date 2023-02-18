@@ -57,7 +57,7 @@ interface IBuySellSZT {
     /// @notice this function faciliate users' to buy SZT ERC20 non-speculative token
     /// @param addressUser: user wallet address
     /// @param amountInSZT: amount of SZT tokens user wishes to purchase
-    function buySZTToken(
+    function buyTokenSZT(
         address addressUser,
         uint256 amountInSZT
     ) external returns(bool);
@@ -68,7 +68,7 @@ interface IBuySellSZT {
     /// @param permitV: GSZT ERC20 token permit signature (value v)
     /// @param permitR: GSZT ERC20 token permit signature (value r)
     /// @param permitS: GSZT ERC20 token permit signature (value s)s
-    function sellSZTToken(
+    function sellTokenSZT(
         address addressUser,
         uint256 amountInSZT,
         uint256 tokenID,

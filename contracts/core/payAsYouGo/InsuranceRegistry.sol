@@ -7,9 +7,12 @@ pragma solidity 0.8.16;
 /// Importing required interfaces
 import "./../../interfaces/IBuySellSZT.sol";
 import "./../../interfaces/ICoveragePool.sol";
-import "./../../interfaces/IInsuranceRegistry.sol";
 import "./../../interfaces/IClaimGovernance.sol";
-import "@openzeppelin/contracts/interfaces/IERC20.sol";
+import "./../../interfaces/IInsuranceRegistry.sol";
+import "@openzeppelin/contracts-upgradeable/interfaces/IERC20Upgradeable.sol";
+
+/// Importing required libraries
+import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
 
 /// Importing required contracts
 import "./../../BaseUpgradeablePausable.sol";
@@ -23,22 +26,20 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
 
     /// initVersion: counter to initialize the init one-time function, max value can be 1.
     /// categoryID: insurance category, e.g., stablecoin depeg insurance.
-    /// PLATFORM_COST: platform fee on the profit earned
     /// addressCFA: address of the Constant Flow Agreement contract interface
-    uint256 private initVersion;
-    uint256 private categoryID;
-    uint256 private constant PLATFORM_COST = 90;
-    address private addressCFA;
+    uint256 public initVersion;
+    uint256 public categoryID;
+    address public addressCFA;
 
     /// tokenDAI: DAI ERC20 token interface
     /// tokenSZT: SZT ERC20 token interface
     /// buySellSZT:Buy Sell SZT contract interface
     /// coveragePool: Coverage Pool contract interface
-    IERC20 private tokenDAI;
-    IERC20 private tokenSZT;
-    IBuySellSZT private buySellSZT;
-    ICoveragePool private coveragePool;
-    IClaimGovernance private claimGovernance;
+    IERC20Upgradeable public tokenDAI;
+    IERC20Upgradeable public tokenSZT;
+    IBuySellSZT public buySellSZT;
+    ICoveragePool public coveragePool;
+    IClaimGovernance public claimGovernance;
 
     /// @notice collects info about the insurance subcategories, e.g., USDC depeg coverage, DAI depeg coverage.
     /// isActive: checks whether insurance given subcategory is active or not.
@@ -94,23 +95,21 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     /// Maps :: categoryID(uint256) => riskPoolCategory(uint256) => epoch(uint256) => RiskPoolEpochInfo(struct)
     mapping(uint256 => mapping(uint256 => mapping(uint256 => RiskPoolEpochInfo))) public versionableRiskPoolsInfo;
 
-    /// @notice function access restricted to the Constant Flow Agreement contract address calls only
-    modifier onlyCFA() {
-        require(_msgSender() == addressCFA);
-        _;
+    function getVersionableRiskPoolsInfo(
+        uint256 categoryID_, 
+        uint256 riskPoolCategory, 
+        uint256 epoch_
+    ) external view returns(uint256, uint256, uint256, uint256, uint256) {
+        RiskPoolEpochInfo memory riskPoolInfo = versionableRiskPoolsInfo[categoryID_][riskPoolCategory][epoch_];
+        return (
+            riskPoolInfo.startTime, 
+            riskPoolInfo.endTime, 
+            riskPoolInfo.riskPoolLiquidity, 
+            riskPoolInfo.riskPoolStreamRate, 
+            riskPoolInfo.liquidation
+        );
     }
 
-    /// @notice function access restricted to the Claim Governance contract address calls only
-    modifier onlyClaimGovernance() {
-        require(_msgSender() == address(claimGovernance));
-        _;
-    }
-
-    /// @notice function access restricted to the Coverage Pool contract address calls only
-    modifier onlyCoveragePool() {
-        require(_msgSender() == address(coveragePool));
-        _;
-    }
 
     function initialize(
         address addressBuySellSZT,
@@ -118,8 +117,8 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         address addressSZT
     ) external initializer {
         buySellSZT = IBuySellSZT(addressBuySellSZT);
-        tokenDAI = IERC20(addressDAI);
-        tokenSZT = IERC20(addressSZT);
+        tokenDAI = IERC20Upgradeable(addressDAI);
+        tokenSZT = IERC20Upgradeable(addressSZT);
         __BaseUpgradeablePausable_init(_msgSender());
     }
 
@@ -221,7 +220,8 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 categoryID_,
         uint256 subCategoryID_,
         uint256 liquiditySupplied
-    ) external override onlyCoveragePool returns(bool) {
+    ) external override returns(bool) {
+        _onlyCoveragePool();
         (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
         _afterUpdateVersionInformation(categoryID_, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, (previousLiquiditySupplied + liquiditySupplied));
         subCategoriesInfo[categoryID_][subCategoryID_].liquidity += liquiditySupplied;
@@ -233,7 +233,8 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 categoryID_,
         uint256 subCategoryID_, 
         uint256 liquiditySupplied
-    ) external override onlyCoveragePool returns(bool) {
+    ) external override  returns(bool) {
+        _onlyCoveragePool();
         (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
         uint256 SZTTokenCounter = buySellSZT.tokenCounter();
         (, uint256 amountCoveredInDAI) = buySellSZT.calculatePriceSZT((SZTTokenCounter - liquiditySupplied), SZTTokenCounter);
@@ -248,7 +249,8 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 subCategoryID_, 
         uint256 coverageAmount,
         uint256 incomingFlowRate
-    ) external onlyCFA returns(bool) {
+    ) external  returns(bool) {
+        _onlyCFA();
         if (!ifEnoughLiquidity(categoryID_, coverageAmount, subCategoryID_)) {
             revert InsuranceRegistry__NotEnoughLiquidityError();
         }
@@ -264,7 +266,8 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         uint256 subCategoryID_, 
         uint256 coverageAmount, 
         uint256 incomingFlowRate
-    ) external onlyCFA returns(bool) {
+    ) external returns(bool) {
+        _onlyCFA();
         (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
         _afterUpdateVersionInformation(categoryID_, subCategoryID_, riskPoolCategory, (previousIncomingFlowRate - incomingFlowRate), previousLiquiditySupplied);
         subCategoriesInfo[categoryID_][subCategoryID_].coverageOffered -= coverageAmount; 
@@ -274,43 +277,11 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     function claimAdded(
         uint256 categoryID_, 
         uint256 subCategoryID_
-    ) external override onlyClaimGovernance returns(bool) {
+    ) external override returns(bool) {
+        _onlyClaimGovernance();
         (uint256 riskPoolCategory, uint256 previousIncomingFlowRate, uint256 previousLiquiditySupplied) = _beforeUpdateVersionInformation(categoryID_, subCategoryID_);
         _afterUpdateVersionInformation(categoryID_, subCategoryID_, riskPoolCategory, previousIncomingFlowRate, previousLiquiditySupplied);
         return true;
-    }
-    
-    function calculateUnderwriterBalance(
-        uint256 categoryID_,
-        uint256 subCategoryID_
-    ) external view returns(uint256) {
-        uint256 userBalance = 0;
-        uint256[] memory activeVersionID = coveragePool.getUnderwriterActiveVersionID(categoryID_, subCategoryID_);
-        uint256 startVersionID = activeVersionID[0];
-        uint256 premiumEarnedFlowRate = 0;
-        uint256 userPremiumEarned = 0;
-        uint256 riskPoolCategory = epochRiskPoolCategory[categoryID_][subCategoryID_][startVersionID];
-        uint256 counter = 0;
-        for(uint256 i = startVersionID; i <= epoch[subCategoryID_];) {
-            if(activeVersionID[counter] == i) {
-                if (coveragePool.getUnderWriterDepositedBalance(categoryID_, subCategoryID_, i) > 0) {
-                    userBalance += coveragePool.getUnderWriterDepositedBalance(categoryID_, subCategoryID_, i);
-                }
-                else {
-                    userBalance -= coveragePool.getUnderWriterWithdrawnBalance(categoryID_, subCategoryID_, i);
-                }
-                ++counter;
-            }
-            riskPoolCategory = epochRiskPoolCategory[categoryID_][subCategoryID_][i];
-            RiskPoolEpochInfo storage riskPool = versionableRiskPoolsInfo[categoryID_][riskPoolCategory][i];
-            userBalance = (userBalance * riskPool.liquidation) / 100;
-            premiumEarnedFlowRate = riskPool.riskPoolStreamRate;            
-            uint256 duration = riskPool.endTime - riskPool.startTime;
-            userPremiumEarned += ((duration * userBalance * premiumEarnedFlowRate * PLATFORM_COST)/ (100 * riskPool.riskPoolLiquidity));
-            ++i;
-        }
-        userBalance += userPremiumEarned;
-        return userBalance;
     }
 
     function _beforeUpdateVersionInformation(
@@ -340,6 +311,28 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         riskPool.riskPoolLiquidity = previousLiquiditySupplied;
         riskPool.riskPoolStreamRate = previousIncomingFlowRate;
         epochRiskPoolCategory[categoryID_][subCategoryID_][versionID] = riskPoolCategory;
+    }
+
+    /// @notice function access restricted to the Constant Flow Agreement contract address calls only
+    function _onlyCFA() private {
+        if(_msgSender() != addressCFA) {
+            revert InsuranceRegistry__AccessRestricted();
+        }
+    }
+
+    /// @notice function access restricted to the Claim Governance contract address calls only
+    function _onlyClaimGovernance() private {
+        if(_msgSender() != address(claimGovernance)) {
+            revert InsuranceRegistry__AccessRestricted();
+        }
+    }
+    
+
+    /// @notice function access restricted to the Coverage Pool contract address calls only
+    function _onlyCoveragePool() private {
+        if(_msgSender() != address(coveragePool)) {
+            revert InsuranceRegistry__AccessRestricted();
+        }
     }
 
     function getVersionID(uint256 categoryID_) external view returns(uint256) {

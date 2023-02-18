@@ -53,7 +53,7 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
     IERC20Upgradeable public immutable tokenGENZ;
     IGlobalPauseOperation public globalPauseOperation;
 
-    /// @notice Maps :: tokenID(uint256) => tokenAddress(address)
+    /// @notice mapping: uint256 tokenID => address tokenAddress
     mapping(uint256 => address) public permissionedTokens;
 
     /// @dev collects user information related to GENZ ERC20 token purchase
@@ -111,7 +111,7 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
     ) external onlyAdmin {
         address tokenAddress = permissionedTokens[tokenID_];
         if(tokenAddress == address(0)) {
-            revert BuyGENZ__ZeroAddressError();
+            revert BuyGENZ__ZeroAddressInputError();
         }
         IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
         token.safeIncreaseAllowance(to, amount);
@@ -141,10 +141,13 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
     }
 
     /// @notice this function facilitates adding new supported payment tokens for GENZ ERC20 token purchase
-    function addTokenAddress(address tokenAddress) external onlyAdmin {
+    function addTokenAddress(address addressToken) external onlyAdmin {
+        if(addressToken == address(0)) {
+            revert BuyGENZ__ZeroAddressInputError();
+        }
         ++tokenID;
-        permissionedTokens[tokenID] = tokenAddress;
-        emit NewTokenAdded(tokenID, tokenAddress);
+        permissionedTokens[tokenID] = addressToken;
+        emit NewTokenAdded(tokenID, addressToken);
     }
 
     /// @notice this function aims to update the bonus token period
@@ -194,7 +197,7 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
         }
         address tokenAddress = permissionedTokens[tokenID_];
         if(tokenAddress == address(0)) {
-            revert BuyGENZ__ZeroAddressError();
+            revert BuyGENZ__ZeroAddressInputError();
         }
         IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
         IERC20PermitUpgradeable tokenWithPermit = IERC20PermitUpgradeable(tokenAddress);

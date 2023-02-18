@@ -55,7 +55,8 @@ contract SwapDAI is ISwapDAI, BaseUpgradeablePausable {
     /// @param permitV: DAI ERC20 token permit signature (value v)
     /// @param permitR: DAI ERC20 token permit signature (value r)
     /// @param permitS: DAI ERC20 token permit signature (value s)
-    function swapDAI(
+    function swapStablecoin(
+        uint256 tokenID_,
         uint256 amount,
         uint256 deadline, 
         uint8 permitV,
