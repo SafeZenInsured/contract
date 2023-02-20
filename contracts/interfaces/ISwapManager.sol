@@ -19,7 +19,7 @@ interface ISwapManager {
         bytes32 permitS
     ) external returns(bool);
 
-    function swapStablecoinSZT(
+    function swapStableSZT(
         uint256 tokenID,
         uint256 amount,
         uint256 deadline, 

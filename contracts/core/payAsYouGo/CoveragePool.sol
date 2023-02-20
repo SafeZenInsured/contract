@@ -154,26 +154,12 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         bytes32 permitR, 
         bytes32 permitS
     ) public override nonReentrant returns(bool) {
-        if (amountInSZT < minPoolAmount) {
-            revert CoveragePool__LessThanMinimumAmountError();
-        }
-        address tokenAddress = permissionedTokens[tokenID_];
-        if(tokenAddress == address(0)) {
-            revert CoveragePool__ZeroAddressInputError();
-        }
-        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
-        IERC20PermitUpgradeable tokenWithPermit = IERC20PermitUpgradeable(tokenAddress);
-        uint256 tokenCounter = buySellSZT.tokenCounter();
-        (/*uint256 amountPerToken*/, uint256 amountPaidInDAI) = buySellSZT.calculatePriceSZT(
-            tokenCounter, (tokenCounter + amountInSZT)
-        );
-        if (token.balanceOf(_msgSender()) < amountPaidInDAI) {
-            revert CoveragePool__InsufficientBalanceError();
-        }
-
-        /// insuranceRegistry.addInsuranceLiquidity() will be called later, \
-        /// \ and the version will be current version + 1
-        bool success = _underwrite(amountPaidInDAI, amountInSZT, categoryID, subCategoryID);
+        (
+            bool success, 
+            uint256 amountPaidInDAI, 
+            IERC20Upgradeable token, 
+            IERC20PermitUpgradeable tokenWithPermit
+        ) = _underwrite(tokenID_, amountInSZT, categoryID, subCategoryID);
         if(!success) {
             revert CoveragePool__InternalUnderwriteOperationFailed();
         }
@@ -187,12 +173,46 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
         return true;
     }
 
+
     function _underwrite(
-        uint256 amountPaidInDAI,
+        uint256 tokenID_,
         uint256 amountInSZT, 
         uint256 categoryID, 
         uint256 subCategoryID
-    ) private returns(bool) {
+    ) private returns(bool, uint256, IERC20Upgradeable, IERC20PermitUpgradeable) {
+        if (amountInSZT < minPoolAmount) {
+            revert CoveragePool__LessThanMinimumAmountError();
+        }
+        address tokenAddress = permissionedTokens[tokenID_];
+        if(tokenAddress == address(0)) {
+            revert CoveragePool__ZeroAddressInputError();
+        }
+        IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
+        IERC20PermitUpgradeable tokenWithPermit = IERC20PermitUpgradeable(tokenAddress);
+
+        uint256 tokenCounter = buySellSZT.tokenCounter();
+        (/*uint256 amountPerToken*/, uint256 amountPaidInDAI) = buySellSZT.calculatePriceSZT(
+            tokenCounter, (tokenCounter + amountInSZT)
+        );
+        if (token.balanceOf(_msgSender()) < amountPaidInDAI) {
+            revert CoveragePool__InsufficientBalanceError();
+        }
+        /// insuranceRegistry.addInsuranceLiquidity() will be called later, \
+        /// \ and the version will be current version + 1
+        _updateUnderwriteInfo(amountInSZT, categoryID, subCategoryID);
+        
+        bool addLiquiditySuccess = insuranceRegistry.addInsuranceLiquidity(categoryID, subCategoryID, amountPaidInDAI);
+        if(!addLiquiditySuccess) {
+            revert CoveragePool_AddInsuranceLiquidityOperationFailed();
+        }
+        return (true, amountPaidInDAI, token, tokenWithPermit);
+    }
+
+    function _updateUnderwriteInfo(
+        uint256 amountInSZT, 
+        uint256 categoryID, 
+        uint256 subCategoryID
+    ) private {
         uint256 currVersion = insuranceRegistry.getVersionID(categoryID) + 1;
         
         totalTokensStaked += amountInSZT;
@@ -210,11 +230,6 @@ contract CoveragePool is ICoveragePool, BaseUpgradeablePausable {
 
         userPoolBalanceSZT[_msgSender()] += amountInSZT;
         usersInfo[_msgSender()][categoryID][subCategoryID].previousUserEpoch = currVersion;
-        bool addLiquiditySuccess = insuranceRegistry.addInsuranceLiquidity(categoryID, subCategoryID, amountPaidInDAI);
-        if(!addLiquiditySuccess) {
-            revert CoveragePool_AddInsuranceLiquidityOperationFailed();
-        }
-        return true;
     }
     
     /// @notice this function aims to activate the SZT token withdrawal timer

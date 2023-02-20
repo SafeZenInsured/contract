@@ -24,7 +24,7 @@ contract SwapManager is ISwapManager, BaseUpgradeablePausable {
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
     /// tokenID: unique token ID for acceptable token addresses
-    /// tokenStableSZT: SZTDAI ERC20 token interface
+    /// tokenStableSZT: StableSZT ERC20 token interface
     /// tokenPermitStableSZT: SZTDAI ERC20 token interface with permit
     uint256 public tokenID;
     IERC20Extended public immutable tokenStableSZT;
@@ -35,10 +35,10 @@ contract SwapManager is ISwapManager, BaseUpgradeablePausable {
 
     /// @custom:oz-upgrades-unsafe-allow-constructor
     /// addressDAI: address of the DAI ERC20 token
-    /// addressSZTDAI: address of the SZTDAI ERC20 token
-    constructor(address addressSZTDAI) {
-        tokenStableSZT = IERC20Extended(addressSZTDAI);
-        tokenPermitStableSZT = IERC20PermitUpgradeable(addressSZTDAI);
+    /// addressStableSZT: address of the SZTDAI ERC20 token
+    constructor(address addressStableSZT) {
+        tokenStableSZT = IERC20Extended(addressStableSZT);
+        tokenPermitStableSZT = IERC20PermitUpgradeable(addressStableSZT);
     }
 
     /// @notice this function facilitates adding new supported payment tokens for StableSZT ERC20 token purchase
@@ -97,7 +97,7 @@ contract SwapManager is ISwapManager, BaseUpgradeablePausable {
     /// @param permitV: tokenStableSZT ERC20 token permit signature (value v)
     /// @param permitR: tokenStableSZT ERC20 token permit signature (value r)
     /// @param permitS: tokenStableSZT ERC20 token permit signature (value s)
-    function swapStablecoinSZT(
+    function swapStableSZT(
         uint256 tokenID_,
         uint256 amount,
         uint256 deadline, 

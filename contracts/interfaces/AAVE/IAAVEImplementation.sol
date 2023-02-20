@@ -49,12 +49,12 @@ interface IAAVEImplementation {
         uint8 v, 
         bytes32 r, 
         bytes32 s
-    ) external returns(bool);
+    ) external;
 
     function withdrawToken(
         address tokenAddress, 
         address rewardTokenAddress, 
         uint256 _amount
-    ) external returns(bool);
+    ) external;
 
 }
