@@ -84,7 +84,7 @@ interface IBuyGENZ {
     /// @param permitV: DAI ERC20 token permit signature (value v)
     /// @param permitR: DAI ERC20 token permit signature (value r)
     /// @param permitS: DAI ERC20 token permit signature (value s)
-    function buyGENZToken(
+    function buyTokenGENZ(
         uint256 tokenID,
         uint256 value,
         uint deadline, 

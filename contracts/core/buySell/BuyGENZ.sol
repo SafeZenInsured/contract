@@ -198,7 +198,7 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
     /// @param permitV: ERC20 token permit signature (value v)
     /// @param permitR: ERC20 token permit signature (value r)
     /// @param permitS: ERC20 token permit signature (value s)
-    function buyGENZToken(
+    function buyTokenGENZ(
         uint256 tokenID_,
         uint256 amountInGENZ,
         uint256 deadline, 
