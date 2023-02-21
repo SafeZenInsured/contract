@@ -65,7 +65,7 @@ contract StablecoinZPController is Ownable, IStablecoinZPController {
         _addNewVersion();
     }
 
-    function addCoveredProtocol(
+    function addCoveredStablecoin(
         string memory stablecoinName,
         address deployedAddress,
         bool isCommunityGoverned,

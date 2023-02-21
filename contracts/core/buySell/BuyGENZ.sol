@@ -94,7 +94,7 @@ contract BuyGENZ is IBuyGENZ, BaseUpgradeablePausable {
         basePriceWithDec = 1e17;
         bonusTokenPeriod = block.timestamp + 2 days;
         bonusTokenPercent = 5; // 0.5%
-        minWithdrawalPeriod = 10 minutes;
+        minWithdrawalPeriod = 5 minutes;
         permissionedTokens[tokenID] = addressDAI;
         __BaseUpgradeablePausable_init(_msgSender());
         emit InitializedContractBuyGENZ(_msgSender());

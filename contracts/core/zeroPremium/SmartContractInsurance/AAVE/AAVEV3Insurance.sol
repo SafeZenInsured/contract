@@ -152,6 +152,19 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         if(tokenAddresses.length != aTokenAddresses.length) {
             revert AAVE_ZP__IncorrectAddressesInputError();
         }
+        bool success = _liquidateTokens(tokenAddresses, aTokenAddresses, claimSettlementAddress, protocolRiskCategory, liquidatedEpoch);
+        if(!success) {
+            revert AAVE_ZP__LiquidateTokensOperationFailedError();
+        }
+    }
+
+    function _liquidateTokens(
+        address[] memory tokenAddresses,
+        address[] memory aTokenAddresses,
+        address claimSettlementAddress,
+        uint256 protocolRiskCategory,
+        uint256 liquidatedEpoch
+    ) private returns(bool) {
         uint256 tokenCount = tokenAddresses.length;
         uint256 liquidationPercent = zpController.getLiquidationFactor(liquidatedEpoch);
         for(uint256 i = 0; i < tokenCount;) {
@@ -163,11 +176,14 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
                 uint256 liquidatedAmount = (
                     (liquidationPercent * aTokenLatestBalance) / 100
                 );
-                epochsInfo[aTokenAddress][childEpoch + 1].aTokenBalance = aTokenLatestBalance - liquidatedAmount;
-                uint256 amountLiquidated = _liquidateInternal(token, aTokenAddress, liquidatedAmount);
-                previousChildEpoch[aTokenAddress] = childEpoch + 1;
-                /// as the below operation call is in loop, violating C-E-I pattern, \
-                /// \ the function returns call status,and if false, reverts the operation.
+                
+                uint256 balanceBeforeLiquidation = token.balanceOf(address(this));
+                interfaceAAVEV3.withdraw(aTokenAddress, liquidatedAmount, address(this));
+                uint256 balanceAfterLiquidation = token.balanceOf(address(this));
+                
+                uint256 amountLiquidated = balanceAfterLiquidation - balanceBeforeLiquidation;
+
+                _aTokenBalanceUpdate(false, childEpoch + 1, liquidatedAmount, aTokenAddress);
                 _claimRewards(aTokenAddress, childEpoch);
 
                 token.safeTransfer(claimSettlementAddress, amountLiquidated);
@@ -175,6 +191,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
             ++i;
         }
         _incrementChildEpoch();
+        return true;
     }
         
     // :::::::::::::::::::::::: EXTERNAL FUNCTIONS ::::::::::::::::::::::: //
@@ -246,7 +263,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         uint256 balanceAfterSupply
     ) private {
         uint256 aTokenIssued = balanceAfterSupply - balanceBeforeSupply;
-        _aTokenBalanceUpdate(true, aTokenIssued, aTokenAddress);
+        _aTokenBalanceUpdate(true, childEpoch, aTokenIssued, aTokenAddress);
         _updateUserBalance(true, aTokenIssued, addressUser, aTokenAddress);
 
 
@@ -259,16 +276,17 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
 
     function _aTokenBalanceUpdate(
         bool isSupplied,
+        uint256 childEpoch_,
         uint256 amount, 
         address aTokenAddress
     ) private {
         uint256 previousTokenEpoch = previousChildEpoch[aTokenAddress];
-        epochsInfo[aTokenAddress][childEpoch].aTokenBalance = (
+        epochsInfo[aTokenAddress][childEpoch_].aTokenBalance = (
             isSupplied ? 
             (epochsInfo[aTokenAddress][previousTokenEpoch].aTokenBalance + amount) : 
             (epochsInfo[aTokenAddress][previousTokenEpoch].aTokenBalance - amount)
         );
-        previousChildEpoch[aTokenAddress] = childEpoch;  
+        previousChildEpoch[aTokenAddress] = childEpoch_;  
     }
 
     function _updateUserBalance(
@@ -313,7 +331,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         uint256 amount
     ) external override nonReentrant {
         ifNotPaused();
-        uint256 initialBalanceCheck = calculateUserBalance(_msgSender(), aTokenAddress);
+        (uint256 initialBalanceCheck, ) = calculateUserRewardAndBalance(_msgSender(), aTokenAddress);
         if(initialBalanceCheck < amount) {
             revert AAVE_ZP__LessThanMinimumAmountError();
         }
@@ -332,7 +350,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
     ) private returns(bool) {
         _incrementChildEpoch();
         _claimRewards(aTokenAddress, (childEpoch - 1));
-        _aTokenBalanceUpdate(false, amount, aTokenAddress);
+        _aTokenBalanceUpdate(false, childEpoch, amount, aTokenAddress);
         _updateUserInfo(false, tokenAddress, aTokenAddress);
         _updateUserBalance(false, amount, addressUser, aTokenAddress);
         
@@ -380,7 +398,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
     function _claimRewards(
         address aTokenAddress,
         uint256 childEpoch_
-    ) internal {
+    ) private {
         address[] memory aTokens = new address[](1);
         aTokens[0] = aTokenAddress;
         (address[] memory rewardDistributionList, uint256[] memory rewardDistributionAmount) = incentivesAAVEV3.claimAllRewardsToSelf(aTokens);
@@ -394,26 +412,9 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         }
     }
 
-    /// @notice internal liquidate function, to avoid deep stack issue and having modular codebase
-    /// token: ERC20 token interface
-    /// aTokenAddress: ERC20 aToken Address
-    /// liquidatedAmount: amount to be liquidated
-    function _liquidateInternal(
-        IERC20Upgradeable token, 
-        address aTokenAddress,
-        uint256 liquidatedAmount
-    ) private returns(uint256) {
-        uint256 balanceBeforeLiquidation = token.balanceOf(address(this));
-        
-        interfaceAAVEV3.withdraw(aTokenAddress, liquidatedAmount, address(this));
-        
-        uint256 balanceAfterLiquidation = token.balanceOf(address(this));
-        uint256 amountLiquidated = balanceAfterLiquidation - balanceBeforeLiquidation;
-        return amountLiquidated;
-    }
-
     
 
+    
     // :::::::::::::::::::::::: READING FUNCTIONS :::::::::::::::::::::::: //
     
     // ::::::::::::::::::: PUBLIC PURE/VIEW FUNCTIONS :::::::::::::::::::: //
@@ -423,39 +424,6 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         if((paused()) || (globalPauseOperation.isPaused())) {
             revert AAVE_ZP__OperationPaused();
         } 
-    }
-
-    function calculateUserBalance(
-        address addressUser,
-        address aTokenAddress
-    ) public view returns(uint256) {
-        uint256 userBalance = 0;
-        uint256 parentVersion = 0;
-        uint256 riskPoolCategory = 0;        
-        uint256 currVersion = childEpoch;
-        uint256 userStartVersion = usersInfo[addressUser][aTokenAddress].startChildEpoch;
-        
-        for(uint i = userStartVersion; i < currVersion;) {
-            userBalance = (
-                userChildEpochBalance[addressUser][aTokenAddress][i] > 0 ? 
-                userChildEpochBalance[addressUser][aTokenAddress][i] : userBalance
-            );
-
-            uint256 _parentVersion = parentEpoch[i];
-            /// this check ensures that if liquidation has happened on a particular parent version,
-            /// then user needs to liquidated once, not again and again for each child version loop call.
-            if(parentVersion != _parentVersion) {
-                parentVersion = _parentVersion;
-                if (zpController.ifProtocolUpdated(protocolID, parentVersion)) {
-                    riskPoolCategory = zpController.getProtocolRiskCategory(protocolID, parentVersion);
-                }
-                if (zpController.isRiskPoolLiquidated(parentVersion, riskPoolCategory)) {
-                    userBalance = ((userBalance * zpController.getLiquidationFactor(parentVersion)) / 100);
-                }
-            }
-            ++i; 
-        }
-        return userBalance;
     }
 
 

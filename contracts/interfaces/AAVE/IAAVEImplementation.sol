@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: agpl-3.0
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.16;
 
 interface IAAVEImplementation {
@@ -22,6 +22,8 @@ interface IAAVEImplementation {
     error AAVE_ZP__IncorrectAddressesInputError();
 
     error AAVE_ZP__TokenWithdrawalOperationReverted();
+
+    error AAVE_ZP__LiquidateTokensOperationFailedError();
 
     // :::::::::::::::::::::::::: CUSTOM EVENTS :::::::::::::::::::::::::: //
 

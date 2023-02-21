@@ -9,6 +9,8 @@ import "./../../BaseUpgradeablePausable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/draft-ERC20PermitUpgradeable.sol";
 
+error GENZ__ImmutableChangesError();
+
 /// Report any bug or issues at:
 /// @custom:security-contact anshik@safezen.finance
 contract GENZ is ERC20Upgradeable, ERC20PermitUpgradeable, BaseUpgradeablePausable {
@@ -20,8 +22,7 @@ contract GENZ is ERC20Upgradeable, ERC20PermitUpgradeable, BaseUpgradeablePausab
         __ERC20Permit_init("GENZ");
         __BaseUpgradeablePausable_init(_msgSender());
     }
-
-    error GENZ__ImmutableChangesError();
+    
     function init(address buyContract) external onlyAdmin {
          if (initVersion > 0) {
             revert GENZ__ImmutableChangesError();
