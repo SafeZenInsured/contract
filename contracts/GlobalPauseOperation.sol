@@ -18,11 +18,21 @@ contract GlobalPauseOperation is BaseUpgradeablePausable, IGlobalPauseOperation 
         if (initVersion > 0) {
             revert GlobalPauseOps__InitializedEarlierError();
         }
-        if (claimGovernance == address(0)) {
+        if (addressClaimGovernance == address(0)) {
             revert GlobalPauseOps__ZeroAddressInputError();
         }
         claimGovernance = addressClaimGovernance;
         ++initVersion;
+    }
+
+    function grantPauseRole(address moderatorAddress) external onlyAdmin {
+        _grantRole(Constants.getPauserRole(), moderatorAddress);
+        emit ModeratorAdded(moderatorAddress);
+    }
+
+    function revokePauserRole(address moderatorAddress) external onlyAdmin {
+        _revokeRole(Constants.getPauserRole(), moderatorAddress);
+        emit ModeratorRemoved(moderatorAddress);
     }
 
     function pauseOperation() external returns(bool) {
@@ -45,7 +55,11 @@ contract GlobalPauseOperation is BaseUpgradeablePausable, IGlobalPauseOperation 
 
     /// @notice this function restricts function calls accessible to the coverage pool contract address only.
     function _isPermitted() private view {
-        if((!isAdmin()) && (_msgSender() != claimGovernance)) {
+        if(
+            (!isAdmin()) && 
+            (!isModerator()) && 
+            (_msgSender() != claimGovernance)
+        ) {
             revert GlobalPauseOps__AccessRestricted();
         }
     }

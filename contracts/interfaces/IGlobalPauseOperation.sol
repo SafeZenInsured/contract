@@ -16,6 +16,10 @@ interface IGlobalPauseOperation {
 
     event UnpausedOperation(address account);
 
+    event ModeratorAdded(address moderatorAddress);
+
+    event ModeratorRemoved(address moderatorAddress);
+
     function pauseOperation() external returns(bool);
 
     function unpauseOperation() external returns(bool);

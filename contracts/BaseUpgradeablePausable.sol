@@ -42,5 +42,8 @@ contract BaseUpgradeablePausable is
         return hasRole(Constants.getAdminRole(), _msgSender());
     }
 
-  
+    function isModerator() public view returns (bool) {
+        return hasRole(Constants.getPauserRole(), _msgSender());
+    }
+
 }

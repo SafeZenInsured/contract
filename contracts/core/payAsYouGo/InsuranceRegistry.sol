@@ -28,9 +28,9 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
     /// categoryID: insurance category, e.g., stablecoin depeg insurance.
     /// addressCFA: address of the Constant Flow Agreement contract interface
     uint256 public initVersion;
-    uint256 public categoryID;
-    address public addressCFA;
+    uint256 public override categoryID;
     uint256 public constant PLATFORM_COST = 90;
+    address public addressCFA;
 
     /// tokenDAI: DAI ERC20 token interface
     /// tokenSZT: SZT ERC20 token interface
@@ -145,8 +145,10 @@ contract InsuranceRegistry is IInsuranceRegistry, BaseUpgradeablePausable {
         _unpause();
     }
 
-    function addInsuranceProduct() external onlyAdmin {
+    function addInsuranceProduct(string memory categoryName) external onlyAdmin {
         ++categoryID;
+        category[categoryID] = categoryName;
+        emit InsuranceProductAdded();
     }
 
     function addInsuranceCategory(

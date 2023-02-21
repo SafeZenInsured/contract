@@ -27,11 +27,9 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
     using SafeERC20Upgradeable for IERC20PermitUpgradeable;
 
     /// maxInsuredDays: the maximum insurance period [in days], 90 days will be kept as default.
-    /// categoriesCount: counter to keep track of the available insurance categories.
     /// startWaitingTime: insurance activation waiting period, 4-8 hours will be kept as default.
     /// minimumInsurancePeriod: the minimum insurance period, 120 minutes will be kept as default.
     uint256 public maxInsuredDays;
-    uint256 public categoriesCount;
     uint256 public startWaitingTime;
     uint256 public minimumInsurancePeriod;
 
@@ -487,7 +485,8 @@ contract ConstantFlowAgreement is ICFA, BaseUpgradeablePausable {
         address userAddress
     ) external view returns(uint256) {
         uint256 globalBalanceToBePaid = 0;
-        for(uint256 i=0; i < categoriesCount;) {
+        uint256 categoriesCount = insuranceRegistry.categoryID();
+        for(uint256 i=1; i <= categoriesCount;) {
             uint256 balanceToBePaid = 0;
             uint256[] memory activeID = findActivePremiumCost(userAddress, i, insuranceRegistry.getLatestSubCategoryID(i));
             for(uint256 j=0; j < activeID.length;) {

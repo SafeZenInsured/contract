@@ -13,11 +13,6 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/draft-ERC20Pe
 /// @custom:security-contact anshik@safezen.finance
 contract GENZ is ERC20Upgradeable, ERC20PermitUpgradeable, BaseUpgradeablePausable {
 
-    /*
-
-    100M fixed supply GENZ tokens will be minted to the Buy Contract. 
-
-    */
     uint256 private initVersion;
     
     function initialize() external initializer {

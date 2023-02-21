@@ -7,6 +7,8 @@ interface IInsuranceRegistry {
 
     error InsuranceRegistry__AccessRestricted();
 
+    event InsuranceProductAdded();
+
     function epoch(uint256 categoryID) external view returns(uint256);
 
     function epochRiskPoolCategory(uint256 categoryID, uint256 subCategoryID, uint256 epoch) external view returns(uint256);
@@ -30,6 +32,7 @@ interface IInsuranceRegistry {
         uint256 subCategoryID
     ) external view returns(uint256);
 
+    function categoryID() external view returns(uint256);
 
 
 

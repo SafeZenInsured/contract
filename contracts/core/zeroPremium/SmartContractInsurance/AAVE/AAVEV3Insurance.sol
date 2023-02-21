@@ -13,6 +13,7 @@ import "./../../../../interfaces/ISmartContractZPController.sol";
 
 /// Importing required libraries
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
+import "./../../../../interfaces/AAVE/DataTypes.sol";
 
 /// Importing required contracts
 import "./../../../../BaseUpgradeablePausable.sol";
@@ -71,23 +72,23 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
     }
 
     /// @notice mapping: uint256 childEpoch => uint256 zeroPremiumControllerEpoch
-    mapping(uint256 => uint256) private parentEpoch;
+    mapping(uint256 => uint256) public parentEpoch;
 
     /// @notice mapping: address rewardTokenAddress => bool isExist
     mapping(address => bool) public rewardTokenExists;
 
     /// @notice mapping: address aTokenAddress => uint256 previousChildEpoch
-    mapping(address => uint256) private previousChildEpoch;
+    mapping(address => uint256) public previousChildEpoch;
     
     /// @notice mapping: address userAddress => address aTokenAddress => struct UserInfo
-    mapping(address => mapping(address => UserInfo)) private usersInfo;
+    mapping(address => mapping(address => UserInfo)) public usersInfo;
     
     /// @notice mapping: address aTokenAddress => uint256 childEpoch => struct EpochSpecificInfo
-    mapping(address => mapping(uint256 => EpochSpecificInfo)) private epochsInfo;
+    mapping(address => mapping(uint256 => EpochSpecificInfo)) public epochsInfo;
     
     /// @notice mapping: address userAddress => address aTokenAddress => \
     /// \ uint256 childEpoch => uint256 cTokenUserBalance
-    mapping(address => mapping(address => mapping(uint256 => uint256))) private userChildEpochBalance;
+    mapping(address => mapping(address => mapping(uint256 => uint256))) public userChildEpochBalance;
 
     // :::::::::::::::::::::::: WRITING FUNCTIONS :::::::::::::::::::::::: //
 
@@ -113,6 +114,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
     function init( 
         uint256 protocolID_,
         address lendingAddress,
+        address incentivesAddress,
         address deployedAddress,
         address zpControllerAddress,
         string memory protocolName
@@ -122,6 +124,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         }
         ++initVersion;
         interfaceAAVEV3 = IAAVEV3Interface(lendingAddress);
+        incentivesAAVEV3 = IAAVEV3Incentives(incentivesAddress);
         zpController = ISmartContractZPController(zpControllerAddress);
         (string memory _protocolName, address _protocolAddress) = zpController.getProtocolInfo(protocolID_);
         if (_protocolAddress != deployedAddress) {
@@ -206,6 +209,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         emit SuppliedToken(_msgSender(), tokenAddress, amount);
     }
 
+    
     function _supplyToken(
         address addressUser,
         address tokenAddress, 
@@ -219,64 +223,67 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         _incrementChildEpoch();
         _claimRewards(aTokenAddress, (childEpoch - 1));
         _updateUserInfo(true, tokenAddress, aTokenAddress);
-        
+
         IERC20Upgradeable token = IERC20Upgradeable(tokenAddress);
         IERC20Upgradeable aToken = IERC20Upgradeable(aTokenAddress);
+
         IERC20PermitUpgradeable tokenWithPermit = IERC20PermitUpgradeable(tokenAddress);
-        
+
         uint256 balanceBeforeSupply = aToken.balanceOf(address(this));
-
-        tokenWithPermit.safePermit(_msgSender(), address(this), amount, deadline, permitV, permitR, permitS);
-        token.safeTransferFrom(_msgSender(), address(this), amount);
+        tokenWithPermit.safePermit(addressUser, address(this), amount, deadline, permitV, permitR, permitS);
+        token.safeTransferFrom(addressUser, address(this), amount);
         token.safeIncreaseAllowance(address(interfaceAAVEV3), amount);
-
         interfaceAAVEV3.supply(tokenAddress, amount, address(this), 0);
-        
         uint256 balanceAfterSupply = aToken.balanceOf(address(this));
-        uint256 aTokenIssued = (balanceAfterSupply - balanceBeforeSupply);
-
-        _aTokenBalanceUpdate(true, aTokenIssued, aTokenAddress);
-        _updateUserBalance(true, aTokenIssued, addressUser, aTokenAddress);
-        
+        _afterSupply(addressUser, aTokenAddress, balanceBeforeSupply, balanceAfterSupply);
         return true;
     }
 
+    function _afterSupply(
+        address addressUser,
+        address aTokenAddress,
+        uint256 balanceBeforeSupply,
+        uint256 balanceAfterSupply
+    ) private {
+        uint256 aTokenIssued = balanceAfterSupply - balanceBeforeSupply;
+        _aTokenBalanceUpdate(true, aTokenIssued, aTokenAddress);
+        _updateUserBalance(true, aTokenIssued, addressUser, aTokenAddress);
+
+
+    }
+
+    // function getLiquidityRate(address tokenAddress) public view returns(uint256) {
+    //     DataTypes.ReserveData memory reserveData = interfaceAAVEV3.getReserveData(tokenAddress);
+    //     return reserveData.currentLiquidityRate;
+    // }
+
     function _aTokenBalanceUpdate(
         bool isSupplied,
-        uint256 amount,
+        uint256 amount, 
         address aTokenAddress
     ) private {
         uint256 previousTokenEpoch = previousChildEpoch[aTokenAddress];
-        if(isSupplied) {
-            epochsInfo[aTokenAddress][childEpoch].aTokenBalance = (
-                epochsInfo[aTokenAddress][previousTokenEpoch].aTokenBalance + amount
-            );
-        } else {
-            epochsInfo[aTokenAddress][childEpoch].aTokenBalance = (
-                epochsInfo[aTokenAddress][previousTokenEpoch].aTokenBalance - amount
-            );
-        }
-        
-        
-        previousChildEpoch[aTokenAddress] = childEpoch;
+        epochsInfo[aTokenAddress][childEpoch].aTokenBalance = (
+            isSupplied ? 
+            (epochsInfo[aTokenAddress][previousTokenEpoch].aTokenBalance + amount) : 
+            (epochsInfo[aTokenAddress][previousTokenEpoch].aTokenBalance - amount)
+        );
+        previousChildEpoch[aTokenAddress] = childEpoch;  
     }
 
     function _updateUserBalance(
         bool isSupplied,
-        uint256 aToken,
+        uint256 amount,
         address addressUser, 
         address aTokenAddress
     ) private {
         uint256 userPreviousEpoch = usersInfo[addressUser][aTokenAddress].previousChildEpoch;
-        if(isSupplied) {
-            userChildEpochBalance[addressUser][aTokenAddress][childEpoch] = (
-                userChildEpochBalance[addressUser][aTokenAddress][userPreviousEpoch] + aToken
-            );
-        } else {
-            userChildEpochBalance[addressUser][aTokenAddress][childEpoch] = (
-                userChildEpochBalance[addressUser][aTokenAddress][userPreviousEpoch] - aToken
-            );
-        }
+        userChildEpochBalance[addressUser][aTokenAddress][childEpoch] = (
+            isSupplied ? 
+            (userChildEpochBalance[addressUser][aTokenAddress][userPreviousEpoch] + amount) : 
+            (userChildEpochBalance[addressUser][aTokenAddress][userPreviousEpoch] - amount)
+        );
+        
         usersInfo[addressUser][aTokenAddress].previousChildEpoch = childEpoch;
     }
 
@@ -286,14 +293,13 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         address aTokenAddress
     ) private {
         UserInfo storage userInfo = usersInfo[_msgSender()][aTokenAddress];
-        (, , , , , uint256 liquidityRate, , , , , , ) = interfaceAAVEV3.getReserveData(tokenAddress);
-
+        DataTypes.ReserveData memory reserveData = interfaceAAVEV3.getReserveData(tokenAddress);
         if((isSupplied) && (!userInfo.isActiveInvested)) {
             userInfo.isActiveInvested = true;
+            userInfo.startChildEpoch = childEpoch;
         }
 
-        userInfo.startChildEpoch = childEpoch;
-        userInfo.poolSupplyRate = liquidityRate;
+        userInfo.poolSupplyRate = reserveData.currentLiquidityRate;
         userInfo.lastRewardWithdrawalEpoch = childEpoch;        
     }
 
@@ -306,35 +312,32 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         address aTokenAddress, 
         uint256 amount
     ) external override nonReentrant {
+        ifNotPaused();
         uint256 initialBalanceCheck = calculateUserBalance(_msgSender(), aTokenAddress);
         if(initialBalanceCheck < amount) {
             revert AAVE_ZP__LessThanMinimumAmountError();
         }
-        ifNotPaused();
 
-        bool success = _withdraw(tokenAddress, aTokenAddress, amount);
+        bool success = _withdraw(_msgSender(), tokenAddress, aTokenAddress, amount);
         if(!success) {
             revert AAVE_ZP__TokenWithdrawalOperationReverted();
         }
     }
 
     function _withdraw(
+        address addressUser,
         address tokenAddress, 
         address aTokenAddress, 
         uint256 amount
     ) private returns(bool) {
-        
         _incrementChildEpoch();
-
         _claimRewards(aTokenAddress, (childEpoch - 1));
+        _aTokenBalanceUpdate(false, amount, aTokenAddress);
+        _updateUserInfo(false, tokenAddress, aTokenAddress);
+        _updateUserBalance(false, amount, addressUser, aTokenAddress);
         
         (uint256 userBalance, uint256[] memory userRewardBalance) = calculateUserRewardAndBalance(_msgSender(), aTokenAddress);
 
-        _aTokenBalanceUpdate(false, amount, aTokenAddress);
-        
-        _updateUserBalance(false, amount, _msgSender(), aTokenAddress);
-        
-        _updateUserInfo(false, tokenAddress, aTokenAddress);
         if (amount == userBalance) {
             usersInfo[_msgSender()][aTokenAddress].isActiveInvested = false;
         }
@@ -350,7 +353,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         for(uint256 i = 0; i < rewardTokenAddresses.length;) {
             address rewardTokenAddress = rewardTokenAddresses[i];
             if(userRewardBalance[i] > 0) {
-                IERC20Upgradeable(rewardTokenAddress).transfer(_msgSender(), userRewardBalance[i]);
+                IERC20Upgradeable(rewardTokenAddress).safeTransfer(_msgSender(), userRewardBalance[i]);
             }
             ++i;
         }
@@ -366,7 +369,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
     }
 
     /// @notice this function aims to increment the child epoch & is called during each user write call
-    function _incrementChildEpoch() private {
+    function _incrementChildEpoch() internal {
         ++childEpoch;
         uint256 currParentVersion =  zpController.latestVersion();
         parentEpoch[childEpoch] = currParentVersion;
@@ -377,7 +380,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
     function _claimRewards(
         address aTokenAddress,
         uint256 childEpoch_
-    ) private {
+    ) internal {
         address[] memory aTokens = new address[](1);
         aTokens[0] = aTokenAddress;
         (address[] memory rewardDistributionList, uint256[] memory rewardDistributionAmount) = incentivesAAVEV3.claimAllRewardsToSelf(aTokens);
@@ -454,6 +457,7 @@ contract AAVEV3Insurance is IAAVEImplementation, BaseUpgradeablePausable {
         }
         return userBalance;
     }
+
 
     /// @notice this function aims to provide user aToken balance in real-time after any liquidations, if happened
     /// aTokenAddress: aToken address

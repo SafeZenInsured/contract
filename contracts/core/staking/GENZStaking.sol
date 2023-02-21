@@ -57,15 +57,15 @@ contract GENZStaking is IGENZStaking, BaseUpgradeablePausable {
         uint256 canWithdrawTime;
     }
 
-    mapping (address => WithdrawWaitPeriod) private checkWaitTime;
+    mapping(address => UserInfo) public usersInfo;
 
-    mapping(address => UserInfo) private usersInfo;
+    mapping (address => WithdrawWaitPeriod) public checkWaitTime;
 
     /// versionID => VersionableInfo
-    mapping(uint256 => VersionableInfo) private versionableInfos;
+    mapping(uint256 => VersionableInfo) public versionableInfos;
 
     /// userAddress => versionID => UserBalanceInfo
-    mapping(address => mapping(uint256 => UserBalanceInfo)) private usersBalanceInfo;
+    mapping(address => mapping(uint256 => UserBalanceInfo)) public usersBalanceInfo;
 
     /// [PRODUCTION TODO: withdrawTimer = timeInDays * 1 days;]
     constructor(address tokenAddressGENZ) {

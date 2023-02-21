@@ -2,10 +2,10 @@
 pragma solidity 0.8.16;
 
 /// Importing required interfaces
-import "./../../interfaces/IERC20Extended.sol";
+import "./../../../interfaces/IERC20Extended.sol";
 
 /// Importing required contracts
-import "./../../BaseUpgradeablePausable.sol";
+import "./../../../BaseUpgradeablePausable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/draft-ERC20PermitUpgradeable.sol";
 

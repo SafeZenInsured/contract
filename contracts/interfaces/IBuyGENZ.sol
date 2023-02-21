@@ -14,19 +14,21 @@ interface IBuyGENZ {
     /// @notice reverts when user input wrong token ID which leads to zero address
     error BuyGENZ__ZeroAddressInputError();
 
+    /// @notice reverts when user tries to withdraw token without purchasing GENZ token
+    error BuyGENZ__ZeroTokensPurchasedError();
+
     /// @notice reverts when user input amount less than the minimum acceptable amount
     error BuyGENZ__LessThanMinimumAmountError();
 
-    /// @notice reverts when user tries to withdraw token without purchasing GENZ token
-    error BuyGENZ__ZeroTokensPurchasedError();
+    error BuyGENZ__GENZBuyOperationFailedError();
 
     /// @notice reverts when user is not having sufficient DAI ERC20 token to purchase GENZ token
     error BuySellGENZ__InsufficientBalanceError();
 
     /// @notice reverts when user tries to withdraw GENZ token before the minimum withdrawal time
-    error BuyGENZ__EarlyWithdrawalRequestedError();
-    
+    error BuyGENZ__EarlyWithdrawalRequestedError();    
 
+    error BuyGENZ__GENZWithdrawOperationFailedError();
     
     // :::::::::::::::::::::::: CUSTOM EVENTS ::::::::::::::::::::::::::: //
 
@@ -91,10 +93,10 @@ interface IBuyGENZ {
         uint8 permitV,
         bytes32 permitR,
         bytes32 permitS
-    ) external returns(bool);
+    ) external;
 
     /// @dev this function aims to faciliate users' GENZ token withdrawal to their respcective wallets
-    function withdrawTokens() external returns(bool);
+    function withdrawTokens() external;
 
 
     // :::::::::::::::::::::::: END OF INTERFACE :::::::::::::::::::::::: //
